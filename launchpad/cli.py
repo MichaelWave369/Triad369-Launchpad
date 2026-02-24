@@ -13,7 +13,7 @@ from rich.panel import Panel
 from .audit import AuditLog
 from .coevo_client import CoEvoClient
 from .nevora_bridge import nevora_installed, scaffold_fallback, scaffold_with_nevora
-from .packager import build_manifest, write_manifest, zip_dir
+from .packager import build_manifest, verify_manifest_dir, verify_manifest_zip, write_manifest, zip_dir
 from .specs import ProjectSpec
 from .utils import env, load_json, load_toml, write_text
 
@@ -271,6 +271,103 @@ def bridge_thread(
         raise typer.Exit(code=2)
 
 
+@app.command("bridge-thread")
+def bridge_thread(
+    thread_id: int = typer.Option(..., "--thread-id", help="CoEvo thread ID to bridge"),
+    out: Path = typer.Option(Path("build/thread369"), "--out", help="Output directory"),
+    target: str = typer.Option("python", "--target", help="Generation target"),
+    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
+    board: Optional[str] = typer.Option(None, "--board", help="Board slug override (for URL display)"),
+) -> None:
+    """Fetch a CoEvo thread and generate a scaffold from title + latest post."""
+    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
+    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
+    client = CoEvoClient.from_env(base_url_override=base_url)
+
+    thread = client.get_thread(thread_id)
+    posts = client.list_thread_posts(thread_id)
+    title = str(thread.get("title", f"Thread {thread_id}"))
+    latest_post = ""
+    if posts:
+        latest = posts[-1]
+        latest_post = str(latest.get("content_md", ""))
+
+    prompt = f"{title}\n\n{latest_post}".strip()
+    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
+
+    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
+    _audit().write(
+        "bridge_thread",
+        {"thread_id": thread_id, "thread_url": thread_url, "out": str(out), "ok": ok, "engine": engine},
+    )
+    console.print(
+        Panel.fit(
+            f"Thread: {thread_id}\nURL: {thread_url}\nOut: {out}\nEngine: {engine}\nResult: {message[:500]}",
+            title="bridge-thread",
+        )
+    )
+    if not ok:
+        raise typer.Exit(code=2)
+
+
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
 @app.command()
 def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
     """Run generated project with lightweight auto-detection."""
@@ -349,8 +446,52 @@ def pack(
     )
     manifest_path = write_manifest(in_dir, manifest)
     out_zip = zip_dir(in_dir, zip_path)
-    _audit().write("pack", {"in": str(in_dir), "zip": str(out_zip), "manifest": str(manifest_path)})
-    console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out_zip}", title="pack"))
+    ok_manifest, errors = verify_manifest_dir(in_dir)
+    _audit().write(
+        "pack",
+        {
+            "in": str(in_dir),
+            "zip": str(out_zip),
+            "manifest": str(manifest_path),
+            "manifest_ok": ok_manifest,
+            "manifest_errors": errors,
+        },
+    )
+    if not ok_manifest:
+        raise typer.BadParameter("Manifest verification failed after packing: " + "; ".join(errors[:3]))
+    console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out_zip}\n✅ Verified manifest hashes", title="pack"))
+
+
+@app.command("verify-artifact")
+def verify_artifact(
+    in_dir: Optional[Path] = typer.Option(None, "--in", help="Directory containing artifact.manifest.json"),
+    zip_path: Optional[Path] = typer.Option(None, "--zip", help="Zip artifact with manifest"),
+) -> None:
+    """Verify manifest hashes for a directory or zip artifact."""
+    if in_dir is None and zip_path is None:
+        raise typer.BadParameter("Provide --in or --zip")
+
+    if in_dir is not None:
+        if not in_dir.exists() or not in_dir.is_dir():
+            raise typer.BadParameter(f"Not a directory: {in_dir}")
+        ok, errors = verify_manifest_dir(in_dir)
+        mode = "dir"
+        target = str(in_dir)
+    else:
+        assert zip_path is not None
+        if not zip_path.exists() or not zip_path.is_file():
+            raise typer.BadParameter(f"Missing zip: {zip_path}")
+        ok, errors = verify_manifest_zip(zip_path)
+        mode = "zip"
+        target = str(zip_path)
+
+    _audit().write("verify_artifact", {"mode": mode, "target": target, "ok": ok, "errors": errors[:10]})
+    if not ok:
+        detail = "\n".join(errors[:10])
+        console.print(Panel.fit(f"❌ Verification failed\n{detail}", title="verify-artifact"))
+        raise typer.Exit(code=2)
+
+    console.print(Panel.fit(f"✅ Verified artifact manifest for {target}", title="verify-artifact"))
 
 
 @app.command("publish-github")

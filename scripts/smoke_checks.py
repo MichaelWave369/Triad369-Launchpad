@@ -34,6 +34,12 @@ def main() -> None:
         zip_dir(scaffold_dir, zip_path)
         assert zip_path.exists() and zip_path.stat().st_size > 0, "zip_dir must produce non-empty zip"
 
+        verify_dir_result = runner.invoke(app, ["verify-artifact", "--in", str(scaffold_dir)], catch_exceptions=False)
+        assert verify_dir_result.exit_code == 0, verify_dir_result.output
+
+        verify_zip_result = runner.invoke(app, ["verify-artifact", "--zip", str(zip_path)], catch_exceptions=False)
+        assert verify_zip_result.exit_code == 0, verify_zip_result.output
+
         run_result = runner.invoke(app, ["run", "--in", str(scaffold_dir)], catch_exceptions=False)
         assert run_result.exit_code == 0, run_result.output
 
