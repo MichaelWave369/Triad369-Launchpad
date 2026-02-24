@@ -136,6 +136,20 @@ triad369 pack --in build/myapp --zip build/myapp.zip
 
 ---
 
+
+## Run, test, and publish GitHub (v0.3)
+
+```bash
+# Run with auto-detection
+triad369 run --in build/hello369
+
+# Test with auto-detection (pytest if available, otherwise unittest)
+triad369 test --in build/hello369
+
+# Publish to GitHub (uses gh CLI if installed; otherwise prints manual commands)
+triad369 publish-github --name your-org/hello369 --in build/hello369
+```
+
 ## Validation smoke script
 
 ```bash

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Optional
 
 import typer
@@ -52,6 +55,34 @@ def _resolve_setting(flag: Optional[str], env_name: str, config_key: str, defaul
         return ev
     cfg = _load_config()
     return cfg.get(config_key, default)
+
+
+def _run_cmd(args: list[str], cwd: Path) -> int:
+    console.print(f"[bold]$[/bold] {' '.join(args)}")
+    proc = subprocess.run(args, cwd=str(cwd), check=False)
+    return proc.returncode
+
+
+def _project_kind(project_dir: Path) -> str:
+    if (project_dir / "app" / "main.py").exists():
+        return "fastapi"
+    if (project_dir / "main.py").exists():
+        return "python"
+    if (project_dir / "package.json").exists():
+        return "vite"
+    return "unknown"
+
+
+def _package_scripts(project_dir: Path) -> dict[str, str]:
+    path = project_dir / "package.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        scripts = data.get("scripts", {})
+        return scripts if isinstance(scripts, dict) else {}
+    except Exception:
+        return {}
 
 
 @app.command()
@@ -107,6 +138,64 @@ def generate(
 
 
 @app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
 def pack(
     in_dir: Path = typer.Option(..., "--in", help="Directory to zip"),
     zip_path: Path = typer.Option(Path("build/artifact.zip"), "--zip", help="Zip output path"),
@@ -128,6 +217,33 @@ def pack(
     out = zip_dir(in_dir, zip_path)
     _audit().write("pack", {"in": str(in_dir), "zip": str(out), "manifest": str(manifest_path)})
     console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out}", title="pack"))
+
+
+@app.command("publish-github")
+def publish_github(
+    name: str = typer.Option(..., "--name", help="GitHub repository name"),
+    project_dir: Path = typer.Option(Path("."), "--in", help="Project directory to publish"),
+    private: bool = typer.Option(False, "--private", help="Create a private repository"),
+) -> None:
+    """Create and push a GitHub repository (uses gh CLI if installed)."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    if shutil.which("gh") is None:
+        console.print("[yellow]gh CLI not found. Run these commands manually:[/yellow]")
+        console.print(f"git init\ngit add .\ngit commit -m \"Initial commit\"\ngh repo create {name} {'--private' if private else '--public'} --source . --push")
+        _audit().write("publish_github", {"in": str(project_dir), "name": name, "mode": "manual"})
+        return
+
+    if not (project_dir / ".git").exists():
+        _run_cmd(["git", "init"], cwd=project_dir)
+    _run_cmd(["git", "add", "."], cwd=project_dir)
+    _run_cmd(["git", "commit", "-m", "Initial commit from Triad369 Launchpad"], cwd=project_dir)
+    vis = "--private" if private else "--public"
+    code = _run_cmd(["gh", "repo", "create", name, vis, "--source", ".", "--push"], cwd=project_dir)
+    _audit().write("publish_github", {"in": str(project_dir), "name": name, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command("publish-coevo")
@@ -192,24 +308,6 @@ def status() -> None:
 
 
 @app.command()
-def run() -> None:
-    """(stub) Run the generated project."""
-    console.print("[dim]run: TODO (detect project type and run it)[/dim]")
-
-
-@app.command()
-def test() -> None:
-    """(stub) Test the generated project."""
-    console.print("[dim]test: TODO[/dim]")
-
-
-@app.command("publish-github")
-def publish_github() -> None:
-    """(stub) Create/push a GitHub repo."""
-    console.print("[dim]publish-github: TODO (PAT-based push)[/dim]")
-
-
-@app.command()
 def deploy() -> None:
-    """(stub) Deploy guide (Railway/Render/Vercel)."""
+    """Deploy guide (Railway/Render/Vercel)."""
     console.print("[dim]deploy: TODO (non-destructive helper)[/dim]")

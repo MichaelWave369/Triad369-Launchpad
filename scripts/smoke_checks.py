@@ -32,6 +32,9 @@ def main() -> None:
         zip_dir(scaffold_dir, zip_path)
         assert zip_path.exists() and zip_path.stat().st_size > 0, "zip_dir must produce non-empty zip"
 
+        run_result = runner.invoke(app, ["run", "--in", str(scaffold_dir)], catch_exceptions=False)
+        assert run_result.exit_code == 0, run_result.output
+
         with runner.isolated_filesystem(temp_dir=str(base)):
             result = runner.invoke(app, ["init"], catch_exceptions=False)
             assert result.exit_code == 0, result.output
