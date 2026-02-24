@@ -85,12 +85,12 @@ def _package_scripts(project_dir: Path) -> dict[str, str]:
         return {}
 
 
-def _generate_project(prompt: str, target: str, mode: str, out: Path) -> tuple[bool, str]:
+def _generate_project(prompt: str, target: str, mode: str, out: Path) -> tuple[bool, str, str]:
     if nevora_installed():
         res = scaffold_with_nevora(prompt=prompt, target=target, out_dir=out, mode=mode)
-    else:
-        res = scaffold_fallback(prompt=prompt, out_dir=out)
-    return res.ok, res.message
+        return res.ok, res.message, "nevora"
+    res = scaffold_fallback(prompt=prompt, out_dir=out)
+    return res.ok, res.message, "fallback"
 
 
 @app.command()
@@ -135,13 +135,13 @@ def generate(
     assert out is not None
     console.print(Panel.fit(f"Prompt: {prompt}\nTarget: {target}\nOut: {out}", title="generate"))
 
-    ok, message = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
-    if nevora_installed():
+    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
+    if engine == "nevora":
         console.print(f"[bold]Nevora:[/bold] {message[:4000]}")
     else:
         console.print(f"[yellow]Nevora not installed.[/yellow] {message}")
 
-    _audit().write("generate", {"ok": ok, "out": str(out), "target": target, "mode": mode})
+    _audit().write("generate", {"ok": ok, "out": str(out), "target": target, "mode": mode, "engine": engine})
     if not ok:
         raise typer.Exit(code=2)
 
@@ -164,8 +164,8 @@ def generate_batch(
     results: list[dict[str, Any]] = []
     for v in variants:
         variant_dir = out / f"variant_{v['label']}"
-        ok, message = _generate_project(prompt=v["prompt"], target=target, mode=mode, out=variant_dir)
-        results.append({"id": v["id"], "label": v["label"], "out": str(variant_dir), "ok": ok, "message": message[:500]})
+        ok, message, engine = _generate_project(prompt=v["prompt"], target=target, mode=mode, out=variant_dir)
+        results.append({"id": v["id"], "label": v["label"], "out": str(variant_dir), "ok": ok, "engine": engine, "message": message[:500]})
 
     chosen = next(r for r in results if r["id"] == pick)
     summary = {
@@ -206,62 +206,65 @@ def bounty_plan(
     console.print(Panel.fit(f"✅ Wrote 3/6/9 bounty plan: {out}", title="bounty-plan"))
 
 
-@app.command()
-def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
-    """Run generated project with lightweight auto-detection."""
-    if not project_dir.exists() or not project_dir.is_dir():
-        raise typer.BadParameter(f"Not a directory: {project_dir}")
+@app.command("simulate-webhook")
+def simulate_webhook(
+    payload_path: Path = typer.Option(..., "--payload", help="Webhook payload JSON file"),
+    out: Path = typer.Option(Path("build/webhook369"), "--out", help="Output directory"),
+    target: str = typer.Option("python", "--target", help="Generation target"),
+    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
+) -> None:
+    """Simulate a CoEvo webhook payload and generate from it."""
+    data = load_json(payload_path)
+    prompt = str(data.get("prompt") or data.get("title") or "A tiny app from webhook event")
+    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
+    _audit().write("simulate_webhook", {"payload": str(payload_path), "out": str(out), "ok": ok, "engine": engine})
+    console.print(
+        Panel.fit(
+            f"Prompt: {prompt}\nOut: {out}\nEngine: {engine}\nMessage: {message[:500]}",
+            title="simulate-webhook",
+        )
+    )
+    if not ok:
+        raise typer.Exit(code=2)
 
-    kind = _project_kind(project_dir)
-    if kind == "python":
-        code = _run_cmd(["python", "main.py"], cwd=project_dir)
-    elif kind == "fastapi":
-        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
-    elif kind == "vite":
-        code = _run_cmd(["npm", "install"], cwd=project_dir)
-        if code == 0:
-            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
-    else:
-        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
 
-    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
-    if code != 0:
-        raise typer.Exit(code=code)
+@app.command("bridge-thread")
+def bridge_thread(
+    thread_id: int = typer.Option(..., "--thread-id", help="CoEvo thread ID to bridge"),
+    out: Path = typer.Option(Path("build/thread369"), "--out", help="Output directory"),
+    target: str = typer.Option("python", "--target", help="Generation target"),
+    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
+    board: Optional[str] = typer.Option(None, "--board", help="Board slug override (for URL display)"),
+) -> None:
+    """Fetch a CoEvo thread and generate a scaffold from title + latest post."""
+    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
+    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
+    client = CoEvoClient.from_env(base_url_override=base_url)
 
+    thread = client.get_thread(thread_id)
+    posts = client.list_thread_posts(thread_id)
+    title = str(thread.get("title", f"Thread {thread_id}"))
+    latest_post = ""
+    if posts:
+        latest = posts[-1]
+        latest_post = str(latest.get("content_md", ""))
 
-@app.command()
-def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
-    """Run tests with lightweight auto-detection."""
-    if not project_dir.exists() or not project_dir.is_dir():
-        raise typer.BadParameter(f"Not a directory: {project_dir}")
+    prompt = f"{title}\n\n{latest_post}".strip()
+    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
 
-    kind = _project_kind(project_dir)
-    if kind in {"python", "fastapi"}:
-        if shutil.which("pytest"):
-            code = _run_cmd(["pytest"], cwd=project_dir)
-            if code == 5:
-                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
-                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
-        else:
-            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
-    elif kind == "vite":
-        scripts = _package_scripts(project_dir)
-        if "test" in scripts:
-            code = _run_cmd(["npm", "test"], cwd=project_dir)
-        elif "lint" in scripts:
-            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
-        else:
-            raise typer.BadParameter("No test/lint script found in package.json")
-    else:
-        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
-
-    if code == 5:
-        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
-        code = 0
-
-    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
-    if code != 0:
-        raise typer.Exit(code=code)
+    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
+    _audit().write(
+        "bridge_thread",
+        {"thread_id": thread_id, "thread_url": thread_url, "out": str(out), "ok": ok, "engine": engine},
+    )
+    console.print(
+        Panel.fit(
+            f"Thread: {thread_id}\nURL: {thread_url}\nOut: {out}\nEngine: {engine}\nResult: {message[:500]}",
+            title="bridge-thread",
+        )
+    )
+    if not ok:
+        raise typer.Exit(code=2)
 
 
 @app.command()

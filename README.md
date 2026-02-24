@@ -159,6 +159,12 @@ triad369 generate-batch --prompt "A tiny CLI that prints Hello 369" --target pyt
 
 # Create a 3/6/9 bounty plan from a spec for CoEvo workflows
 triad369 bounty-plan --spec examples/spec_python_cli.toml --out build/bounty_plan_369.json
+
+# Simulate a webhook event payload and generate automatically
+triad369 simulate-webhook --payload examples/webhook_payload.json --out build/webhook369
+
+# Bridge an existing CoEvo thread into a generated scaffold
+triad369 bridge-thread --thread-id 123 --out build/thread369 --target python
 ```
 
 ## Validation smoke script

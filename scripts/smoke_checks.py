@@ -52,6 +52,16 @@ def main() -> None:
         assert batch_result.exit_code == 0, batch_result.output
         assert (batch_dir / "batch_summary.json").exists(), "generate-batch must write batch_summary.json"
 
+        webhook_payload = base / "webhook.json"
+        webhook_payload.write_text("{\"title\": \"Webhook 369\", \"prompt\": \"Build me a tiny 369 CLI\"}\n", encoding="utf-8")
+        webhook_result = runner.invoke(
+            app,
+            ["simulate-webhook", "--payload", str(webhook_payload), "--out", str(base / "webhook_out")],
+            catch_exceptions=False,
+        )
+        assert webhook_result.exit_code == 0, webhook_result.output
+        assert (base / "webhook_out" / "main.py").exists(), "simulate-webhook must generate scaffold"
+
         bounty_out = base / "bounty_plan_369.json"
         spec_path = ROOT / "examples" / "spec_python_cli.toml"
         bounty_result = runner.invoke(
