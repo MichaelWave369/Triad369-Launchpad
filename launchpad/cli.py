@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -85,6 +85,14 @@ def _package_scripts(project_dir: Path) -> dict[str, str]:
         return {}
 
 
+def _generate_project(prompt: str, target: str, mode: str, out: Path) -> tuple[bool, str]:
+    if nevora_installed():
+        res = scaffold_with_nevora(prompt=prompt, target=target, out_dir=out, mode=mode)
+    else:
+        res = scaffold_fallback(prompt=prompt, out_dir=out)
+    return res.ok, res.message
+
+
 @app.command()
 def init() -> None:
     """Initialize local Launchpad config (stored in .triad369/)."""
@@ -123,18 +131,137 @@ def generate(
         if out is None:
             out = Path("build/out")
 
+    assert prompt is not None
+    assert out is not None
     console.print(Panel.fit(f"Prompt: {prompt}\nTarget: {target}\nOut: {out}", title="generate"))
 
+    ok, message = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
     if nevora_installed():
-        res = scaffold_with_nevora(prompt=prompt, target=target, out_dir=out, mode=mode)
-        console.print(f"[bold]Nevora:[/bold] {res.message[:4000]}")
+        console.print(f"[bold]Nevora:[/bold] {message[:4000]}")
     else:
-        res = scaffold_fallback(prompt=prompt, out_dir=out)
-        console.print(f"[yellow]Nevora not installed.[/yellow] {res.message}")
+        console.print(f"[yellow]Nevora not installed.[/yellow] {message}")
 
-    _audit().write("generate", {"ok": res.ok, "out": str(res.output_dir), "target": target, "mode": mode})
-    if not res.ok:
+    _audit().write("generate", {"ok": ok, "out": str(out), "target": target, "mode": mode})
+    if not ok:
         raise typer.Exit(code=2)
+
+
+@app.command("generate-batch")
+def generate_batch(
+    prompt: str = typer.Option(..., help="Base prompt"),
+    target: str = typer.Option("python", help="Nevora target"),
+    mode: str = typer.Option("automation", help="Nevora mode"),
+    out: Path = typer.Option(Path("build/batch369"), help="Directory to place 3 variants"),
+    pick: int = typer.Option(1, min=1, max=3, help="Preferred variant index (1-3)"),
+) -> None:
+    """Generate 3 prompt variants (3-6-9 style) and select a preferred winner."""
+    variants = [
+        {"id": 1, "label": "3", "prompt": f"{prompt}\n\nStyle: minimal runnable MVP."},
+        {"id": 2, "label": "6", "prompt": f"{prompt}\n\nStyle: production-friendly structure and docs."},
+        {"id": 3, "label": "9", "prompt": f"{prompt}\n\nStyle: extra polish, tests, and developer UX."},
+    ]
+
+    results: list[dict[str, Any]] = []
+    for v in variants:
+        variant_dir = out / f"variant_{v['label']}"
+        ok, message = _generate_project(prompt=v["prompt"], target=target, mode=mode, out=variant_dir)
+        results.append({"id": v["id"], "label": v["label"], "out": str(variant_dir), "ok": ok, "message": message[:500]})
+
+    chosen = next(r for r in results if r["id"] == pick)
+    summary = {
+        "prompt": prompt,
+        "target": target,
+        "mode": mode,
+        "variants": results,
+        "winner": chosen,
+    }
+    summary_path = out / "batch_summary.json"
+    write_text(summary_path, json.dumps(summary, indent=2) + "\n")
+    _audit().write("generate_batch", {"out": str(out), "winner": chosen["out"], "pick": pick})
+
+    console.print(Panel.fit(
+        f"✅ Generated 3 variants in {out}\n✅ Winner: {chosen['out']}\n✅ Summary: {summary_path}",
+        title="generate-batch",
+    ))
+
+
+@app.command("bounty-plan")
+def bounty_plan(
+    spec: Path = typer.Option(..., "--spec", help="Spec file (.toml/.json)"),
+    out: Path = typer.Option(Path("build/bounty_plan_369.json"), "--out", help="Output plan path"),
+) -> None:
+    """Create a 3/6/9 bounty plan from a spec (bridge helper for CoEvo workflows)."""
+    s = _load_spec(spec)
+    plan = {
+        "name": s.name,
+        "target": s.target,
+        "bounties": [
+            {"tier": 3, "title": "UI polish / DX tweaks", "reward": 300, "prompt": s.prompt},
+            {"tier": 6, "title": "Backend hardening + reliability", "reward": 600, "prompt": s.prompt},
+            {"tier": 9, "title": "Deploy + observability", "reward": 900, "prompt": s.prompt},
+        ],
+    }
+    write_text(out, json.dumps(plan, indent=2) + "\n")
+    _audit().write("bounty_plan", {"spec": str(spec), "out": str(out)})
+    console.print(Panel.fit(f"✅ Wrote 3/6/9 bounty plan: {out}", title="bounty-plan"))
+
+
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command()
@@ -214,9 +341,9 @@ def pack(
         prompt=prompt,
     )
     manifest_path = write_manifest(in_dir, manifest)
-    out = zip_dir(in_dir, zip_path)
-    _audit().write("pack", {"in": str(in_dir), "zip": str(out), "manifest": str(manifest_path)})
-    console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out}", title="pack"))
+    out_zip = zip_dir(in_dir, zip_path)
+    _audit().write("pack", {"in": str(in_dir), "zip": str(out_zip), "manifest": str(manifest_path)})
+    console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out_zip}", title="pack"))
 
 
 @app.command("publish-github")
@@ -231,7 +358,10 @@ def publish_github(
 
     if shutil.which("gh") is None:
         console.print("[yellow]gh CLI not found. Run these commands manually:[/yellow]")
-        console.print(f"git init\ngit add .\ngit commit -m \"Initial commit\"\ngh repo create {name} {'--private' if private else '--public'} --source . --push")
+        console.print(
+            f"git init\ngit add .\ngit commit -m \"Initial commit\"\n"
+            f"gh repo create {name} {'--private' if private else '--public'} --source . --push"
+        )
         _audit().write("publish_github", {"in": str(project_dir), "name": name, "mode": "manual"})
         return
 

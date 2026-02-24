@@ -35,6 +35,33 @@ def main() -> None:
         run_result = runner.invoke(app, ["run", "--in", str(scaffold_dir)], catch_exceptions=False)
         assert run_result.exit_code == 0, run_result.output
 
+        batch_dir = base / "batch"
+        batch_result = runner.invoke(
+            app,
+            [
+                "generate-batch",
+                "--prompt",
+                "A tiny CLI that prints Hello 369",
+                "--target",
+                "python",
+                "--out",
+                str(batch_dir),
+            ],
+            catch_exceptions=False,
+        )
+        assert batch_result.exit_code == 0, batch_result.output
+        assert (batch_dir / "batch_summary.json").exists(), "generate-batch must write batch_summary.json"
+
+        bounty_out = base / "bounty_plan_369.json"
+        spec_path = ROOT / "examples" / "spec_python_cli.toml"
+        bounty_result = runner.invoke(
+            app,
+            ["bounty-plan", "--spec", str(spec_path), "--out", str(bounty_out)],
+            catch_exceptions=False,
+        )
+        assert bounty_result.exit_code == 0, bounty_result.output
+        assert bounty_out.exists(), "bounty-plan must write output file"
+
         with runner.isolated_filesystem(temp_dir=str(base)):
             result = runner.invoke(app, ["init"], catch_exceptions=False)
             assert result.exit_code == 0, result.output

@@ -117,7 +117,7 @@ If Nevora isn't installed, Launchpad generates a minimal scaffold (so the pipeli
 **6 Modules:** Spec • Nevora • Packager • CoEvo • Deploy • Audit  
 **9 Commands:** init • generate • run • test • pack • publish-github • publish-coevo • deploy • status
 
-(Some commands are stubs right now—perfect for OSS contributions.)
+Core commands are now implemented for day-to-day Spec → Generate → Run/Test → Pack → Publish flow.
 
 ---
 
@@ -148,6 +148,17 @@ triad369 test --in build/hello369
 
 # Publish to GitHub (uses gh CLI if installed; otherwise prints manual commands)
 triad369 publish-github --name your-org/hello369 --in build/hello369
+```
+
+
+## Bridge helpers (v0.4)
+
+```bash
+# Generate 3 variants (3/6/9 style) and pick preferred winner
+triad369 generate-batch --prompt "A tiny CLI that prints Hello 369" --target python --out build/batch369 --pick 1
+
+# Create a 3/6/9 bounty plan from a spec for CoEvo workflows
+triad369 bounty-plan --spec examples/spec_python_cli.toml --out build/bounty_plan_369.json
 ```
 
 ## Validation smoke script
