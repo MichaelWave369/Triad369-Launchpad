@@ -33,8 +33,8 @@ class CoEvoClient:
         self.token = token
 
     @classmethod
-    def from_env(cls) -> "CoEvoClient":
-        base_url = env("COEVO_BASE_URL", "http://localhost:8000")
+    def from_env(cls, base_url_override: Optional[str] = None) -> "CoEvoClient":
+        base_url = (base_url_override or env("COEVO_BASE_URL", "http://localhost:8000")).strip()
         token = env("COEVO_TOKEN", "")
         if not token:
             handle = env("COEVO_HANDLE")

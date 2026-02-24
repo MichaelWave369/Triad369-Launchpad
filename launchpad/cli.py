@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Optional
 
 import typer
@@ -8,11 +11,11 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .audit import AuditLog
-from .specs import ProjectSpec
-from .utils import load_json, load_toml, write_text
-from .nevora_bridge import nevora_installed, scaffold_with_nevora, scaffold_fallback
-from .packager import zip_dir
 from .coevo_client import CoEvoClient
+from .nevora_bridge import nevora_installed, scaffold_fallback, scaffold_with_nevora
+from .packager import build_manifest, write_manifest, zip_dir
+from .specs import ProjectSpec
+from .utils import env, load_json, load_toml, write_text
 
 app = typer.Typer(add_completion=False, help="Triad369 Launchpad — Spec → Generate → Ship")
 console = Console()
@@ -34,6 +37,52 @@ def _load_spec(path: Path) -> ProjectSpec:
     else:
         raise typer.BadParameter("Spec must be .toml or .json")
     return ProjectSpec(**data)
+
+
+def _load_config() -> dict[str, str]:
+    cfg_path = _config_root() / "config.toml"
+    if not cfg_path.exists():
+        return {}
+    data = load_toml(cfg_path)
+    return {k: str(v) for k, v in data.items()}
+
+
+def _resolve_setting(flag: Optional[str], env_name: str, config_key: str, default: str) -> str:
+    if flag is not None:
+        return flag
+    ev = env(env_name, "")
+    if ev:
+        return ev
+    cfg = _load_config()
+    return cfg.get(config_key, default)
+
+
+def _run_cmd(args: list[str], cwd: Path) -> int:
+    console.print(f"[bold]$[/bold] {' '.join(args)}")
+    proc = subprocess.run(args, cwd=str(cwd), check=False)
+    return proc.returncode
+
+
+def _project_kind(project_dir: Path) -> str:
+    if (project_dir / "app" / "main.py").exists():
+        return "fastapi"
+    if (project_dir / "main.py").exists():
+        return "python"
+    if (project_dir / "package.json").exists():
+        return "vite"
+    return "unknown"
+
+
+def _package_scripts(project_dir: Path) -> dict[str, str]:
+    path = project_dir / "package.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        scripts = data.get("scripts", {})
+        return scripts if isinstance(scripts, dict) else {}
+    except Exception:
+        return {}
 
 
 @app.command()
@@ -58,7 +107,7 @@ def generate(
     prompt: Optional[str] = typer.Option(None, help="Prompt (if not using --spec)"),
     target: str = typer.Option("python", help="Nevora target (python, web-backend, etc.)"),
     mode: str = typer.Option("automation", help="Nevora mode"),
-    out: Path = typer.Option(Path("build/out"), help="Output directory for scaffold"),
+    out: Optional[Path] = typer.Option(None, help="Output directory for scaffold"),
 ) -> None:
     """Generate a runnable scaffold (Nevora if available; fallback if not)."""
     if spec:
@@ -66,10 +115,13 @@ def generate(
         prompt = s.prompt
         target = s.target
         mode = s.mode
-        out = out or Path("build") / s.name
+        if out is None:
+            out = Path("build") / s.name
     else:
         if not prompt:
             raise typer.BadParameter("Provide --prompt or --spec")
+        if out is None:
+            out = Path("build/out")
 
     console.print(Panel.fit(f"Prompt: {prompt}\nTarget: {target}\nOut: {out}", title="generate"))
 
@@ -86,51 +138,164 @@ def generate(
 
 
 @app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
 def pack(
     in_dir: Path = typer.Option(..., "--in", help="Directory to zip"),
     zip_path: Path = typer.Option(Path("build/artifact.zip"), "--zip", help="Zip output path"),
+    name: Optional[str] = typer.Option(None, "--name", help="Project name for manifest metadata"),
+    target: str = typer.Option("python", "--target", help="Project target for manifest metadata"),
+    prompt: str = typer.Option("", "--prompt", help="Prompt text for manifest hash metadata"),
 ) -> None:
-    """Zip a scaffold directory into a single artifact."""
+    """Zip a scaffold directory into a single artifact and write artifact.manifest.json."""
     if not in_dir.exists() or not in_dir.is_dir():
         raise typer.BadParameter(f"Not a directory: {in_dir}")
+
+    manifest = build_manifest(
+        in_dir,
+        project_name=name or in_dir.name,
+        target=target,
+        prompt=prompt,
+    )
+    manifest_path = write_manifest(in_dir, manifest)
     out = zip_dir(in_dir, zip_path)
-    _audit().write("pack", {"in": str(in_dir), "zip": str(out)})
-    console.print(Panel.fit(f"✅ Zipped {in_dir} → {out}", title="pack"))
+    _audit().write("pack", {"in": str(in_dir), "zip": str(out), "manifest": str(manifest_path)})
+    console.print(Panel.fit(f"✅ Manifest: {manifest_path}\n✅ Zipped {in_dir} → {out}", title="pack"))
+
+
+@app.command("publish-github")
+def publish_github(
+    name: str = typer.Option(..., "--name", help="GitHub repository name"),
+    project_dir: Path = typer.Option(Path("."), "--in", help="Project directory to publish"),
+    private: bool = typer.Option(False, "--private", help="Create a private repository"),
+) -> None:
+    """Create and push a GitHub repository (uses gh CLI if installed)."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    if shutil.which("gh") is None:
+        console.print("[yellow]gh CLI not found. Run these commands manually:[/yellow]")
+        console.print(f"git init\ngit add .\ngit commit -m \"Initial commit\"\ngh repo create {name} {'--private' if private else '--public'} --source . --push")
+        _audit().write("publish_github", {"in": str(project_dir), "name": name, "mode": "manual"})
+        return
+
+    if not (project_dir / ".git").exists():
+        _run_cmd(["git", "init"], cwd=project_dir)
+    _run_cmd(["git", "add", "."], cwd=project_dir)
+    _run_cmd(["git", "commit", "-m", "Initial commit from Triad369 Launchpad"], cwd=project_dir)
+    vis = "--private" if private else "--public"
+    code = _run_cmd(["gh", "repo", "create", name, vis, "--source", ".", "--push"], cwd=project_dir)
+    _audit().write("publish_github", {"in": str(project_dir), "name": name, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command("publish-coevo")
 def publish_coevo(
-    zip_path: Path = typer.Option(..., "--zip", help="Zip artifact to upload"),
+    in_dir: Optional[Path] = typer.Option(None, "--in", help="Scaffold directory to zip + upload"),
+    zip_path: Optional[Path] = typer.Option(None, "--zip", help="Zip artifact to upload (or auto-created from --in)"),
     title: str = typer.Option(..., "--title", help="Thread title"),
-    board: str = typer.Option("dev", "--board", help="Board slug (dev/help/general)"),
+    board: Optional[str] = typer.Option(None, "--board", help="Board slug (dev/help/general)"),
     summary: str = typer.Option("Built with Triad369 Launchpad.", "--summary", help="Post body (markdown)"),
     repo_url: Optional[str] = typer.Option(None, "--repo-url", help="Optional repo link to add to CoEvo"),
+    tags: str = typer.Option("369,launchpad", "--tags", help="Comma-separated tags for optional repo link"),
 ) -> None:
     """Create a CoEvo thread, upload artifact, attach it, and optionally add a repo link."""
+    if in_dir is None and zip_path is None:
+        raise typer.BadParameter("Provide --in or --zip")
+
+    if in_dir is not None:
+        if not in_dir.exists() or not in_dir.is_dir():
+            raise typer.BadParameter(f"Not a directory: {in_dir}")
+        if zip_path is None:
+            zip_path = Path("build") / f"{in_dir.name}.zip"
+        manifest = build_manifest(in_dir, project_name=in_dir.name, target="python", prompt="")
+        write_manifest(in_dir, manifest)
+        zip_dir(in_dir, zip_path)
+
+    assert zip_path is not None
     if not zip_path.exists():
         raise typer.BadParameter(f"Missing zip: {zip_path}")
 
-    client = CoEvoClient.from_env()
-    board_id = client.find_board_id(board)
+    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
+    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
+
+    client = CoEvoClient.from_env(base_url_override=base_url)
+    board_id = client.find_board_id(board_slug)
     thread = client.create_thread(board_id=board_id, title=title)
     thread_id = int(thread["id"])
 
-    # Add a summary post
     client.create_post(thread_id=thread_id, content_md=summary)
 
-    # Upload + attach zip
     art = client.upload_artifact(zip_path)
     art_id = int(art["id"])
     client.attach_artifact_to_thread(artifact_id=art_id, thread_id=thread_id)
 
-    # Optional repo link
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if repo_url:
-        client.add_repo_link(url=repo_url, title=title, description="Launchpad published repo", tags=["launchpad","369"])
+        client.add_repo_link(url=repo_url, title=title, description="Launchpad published repo", tags=tag_list)
 
-    _audit().write("publish_coevo", {"thread_id": thread_id, "artifact_id": art_id, "board": board})
+    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
+    _audit().write("publish_coevo", {"thread_id": thread_id, "artifact_id": art_id, "board": board_slug, "thread_url": thread_url})
     console.print(Panel.fit(
-        f"✅ Published to CoEvo\nThread: {thread_id}\nArtifact: {art_id}\nBoard: {board}",
-        title="publish-coevo"
+        f"✅ Published to CoEvo\nThread: {thread_id}\nArtifact: {art_id}\nBoard: {board_slug}\nURL: {thread_url}",
+        title="publish-coevo",
     ))
 
 
@@ -142,27 +307,7 @@ def status() -> None:
     console.print(Panel.fit(f"audit: {path} ({'exists' if exists else 'missing'})", title="status"))
 
 
-# --- stubs (future 9-command set) ---
-
-@app.command()
-def run() -> None:
-    """(stub) Run the generated project."""
-    console.print("[dim]run: TODO (detect project type and run it)[/dim]")
-
-
-@app.command()
-def test() -> None:
-    """(stub) Test the generated project."""
-    console.print("[dim]test: TODO[/dim]")
-
-
-@app.command("publish-github")
-def publish_github() -> None:
-    """(stub) Create/push a GitHub repo."""
-    console.print("[dim]publish-github: TODO (PAT-based push)[/dim]")
-
-
 @app.command()
 def deploy() -> None:
-    """(stub) Deploy guide (Railway/Render/Vercel)."""
+    """Deploy guide (Railway/Render/Vercel)."""
     console.print("[dim]deploy: TODO (non-destructive helper)[/dim]")
