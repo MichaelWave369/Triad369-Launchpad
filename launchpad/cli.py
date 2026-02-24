@@ -58,7 +58,7 @@ def generate(
     prompt: Optional[str] = typer.Option(None, help="Prompt (if not using --spec)"),
     target: str = typer.Option("python", help="Nevora target (python, web-backend, etc.)"),
     mode: str = typer.Option("automation", help="Nevora mode"),
-    out: Path = typer.Option(Path("build/out"), help="Output directory for scaffold"),
+    out: Optional[Path] = typer.Option(None, help="Output directory for scaffold"),
 ) -> None:
     """Generate a runnable scaffold (Nevora if available; fallback if not)."""
     if spec:
@@ -66,10 +66,13 @@ def generate(
         prompt = s.prompt
         target = s.target
         mode = s.mode
-        out = out or Path("build") / s.name
+        if out is None:
+            out = Path("build") / s.name
     else:
         if not prompt:
             raise typer.BadParameter("Provide --prompt or --spec")
+        if out is None:
+            out = Path("build/out")
 
     console.print(Panel.fit(f"Prompt: {prompt}\nTarget: {target}\nOut: {out}", title="generate"))
 

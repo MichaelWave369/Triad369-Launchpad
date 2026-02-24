@@ -12,26 +12,40 @@ Your **3rd pillar** repo to complete the 3-6-9 triad:
 
 ## Quickstart (local)
 
-```bash
-# 1) Create venv
+### Windows (PowerShell)
+```powershell
 python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip setuptools wheel build twine
+python -m pip install -e .
 
-# 2) Install
-pip install -e .
-
-# 3) Initialize local config
 triad369 init
-
-# 4) Run a demo generate + pack (no external services required)
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
+python -m build
+python -m twine check dist/*
+```
+
+### macOS/Linux (bash/zsh)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip setuptools wheel build twine
+python -m pip install -e .
+
+triad369 init
+triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
+triad369 pack --in build/hello369 --zip build/hello369.zip
+python -m build
+python -m twine check dist/*
 ```
 
 ---
+
+
+### Python compatibility
+- Python 3.11+ uses the standard-library `tomllib`.
+- Python 3.10 automatically uses `tomli` (installed via package dependency).
 
 ## CoEvo publish (optional, but supported)
 
@@ -111,6 +125,12 @@ triad369 pack --in build/myapp --zip build/myapp.zip
 ```
 
 ---
+
+## Validation smoke script
+
+```bash
+python scripts/smoke_checks.py
+```
 
 ## Roadmap (v0.x)
 
