@@ -22,7 +22,7 @@ python -m pip install -e .
 triad369 init
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
-# also writes build/hello369/artifact.manifest.json
+# also writes build/hello369/artifact.manifest.json (and does not include itself in file hashes)
 python -m build
 python -m twine check dist/*
 ```
@@ -37,7 +37,7 @@ python -m pip install -e .
 triad369 init
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
-# also writes build/hello369/artifact.manifest.json
+# also writes build/hello369/artifact.manifest.json (and does not include itself in file hashes)
 python -m build
 python -m twine check dist/*
 ```
@@ -148,6 +148,9 @@ triad369 test --in build/hello369
 
 # Publish to GitHub (uses gh CLI if installed; otherwise prints manual commands)
 triad369 publish-github --name your-org/hello369 --in build/hello369
+
+# Print non-destructive deploy guide commands
+triad369 deploy --in build/hello369 --provider railway
 ```
 
 

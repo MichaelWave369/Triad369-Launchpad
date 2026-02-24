@@ -27,6 +27,8 @@ def main() -> None:
         manifest = build_manifest(scaffold_dir, project_name="fallback", target="python", prompt="hello")
         manifest_path = write_manifest(scaffold_dir, manifest)
         assert manifest_path.exists(), "packager must write artifact.manifest.json"
+        manifest_data = manifest_path.read_text(encoding="utf-8")
+        assert "artifact.manifest.json" not in manifest_data, "manifest file must not hash itself"
 
         zip_path = base / "artifact.zip"
         zip_dir(scaffold_dir, zip_path)
@@ -34,6 +36,13 @@ def main() -> None:
 
         run_result = runner.invoke(app, ["run", "--in", str(scaffold_dir)], catch_exceptions=False)
         assert run_result.exit_code == 0, run_result.output
+
+        deploy_result = runner.invoke(
+            app,
+            ["deploy", "--in", str(scaffold_dir), "--provider", "railway"],
+            catch_exceptions=False,
+        )
+        assert deploy_result.exit_code == 0, deploy_result.output
 
         batch_dir = base / "batch"
         batch_result = runner.invoke(

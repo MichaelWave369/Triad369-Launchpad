@@ -7,6 +7,9 @@ from pathlib import Path
 import zipfile
 
 
+MANIFEST_FILE_NAME = "artifact.manifest.json"
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -35,6 +38,8 @@ def build_manifest(
         if p.is_dir():
             continue
         rel = str(p.relative_to(source_dir))
+        if rel == MANIFEST_FILE_NAME:
+            continue
         files.append({"path": rel, "sha256": _sha256_file(p)})
 
     return {
@@ -47,7 +52,7 @@ def build_manifest(
 
 
 def write_manifest(source_dir: Path, manifest: dict[str, object]) -> Path:
-    manifest_path = source_dir / "artifact.manifest.json"
+    manifest_path = source_dir / MANIFEST_FILE_NAME
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest_path
 

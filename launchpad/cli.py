@@ -168,6 +168,10 @@ def generate_batch(
         results.append({"id": v["id"], "label": v["label"], "out": str(variant_dir), "ok": ok, "engine": engine, "message": message[:500]})
 
     chosen = next(r for r in results if r["id"] == pick)
+    if not chosen["ok"]:
+        _audit().write("generate_batch", {"out": str(out), "winner": chosen["out"], "pick": pick, "ok": False})
+        raise typer.Exit(code=2)
+
     summary = {
         "prompt": prompt,
         "target": target,
@@ -371,7 +375,7 @@ def publish_github(
     if not (project_dir / ".git").exists():
         _run_cmd(["git", "init"], cwd=project_dir)
     _run_cmd(["git", "add", "."], cwd=project_dir)
-    _run_cmd(["git", "commit", "-m", "Initial commit from Triad369 Launchpad"], cwd=project_dir)
+    _run_cmd(["git", "commit", "--allow-empty", "-m", "Initial commit from Triad369 Launchpad"], cwd=project_dir)
     vis = "--private" if private else "--public"
     code = _run_cmd(["gh", "repo", "create", name, vis, "--source", ".", "--push"], cwd=project_dir)
     _audit().write("publish_github", {"in": str(project_dir), "name": name, "exit_code": code})
@@ -441,6 +445,46 @@ def status() -> None:
 
 
 @app.command()
-def deploy() -> None:
-    """Deploy guide (Railway/Render/Vercel)."""
-    console.print("[dim]deploy: TODO (non-destructive helper)[/dim]")
+def deploy(
+    project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory"),
+    provider: str = typer.Option("railway", "--provider", help="railway, render, vercel"),
+) -> None:
+    """Print non-destructive deploy commands by provider and project type."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    provider = provider.lower().strip()
+    lines = [f"Project: {project_dir}", f"Kind: {kind}", f"Provider: {provider}"]
+
+    if provider == "railway":
+        lines += [
+            "railway login",
+            "railway init",
+            "railway up",
+        ]
+    elif provider == "render":
+        lines += [
+            "Create a new Web Service in Render dashboard",
+            "Connect repo and choose build/start commands below",
+        ]
+    elif provider == "vercel":
+        lines += [
+            "vercel login",
+            "vercel",
+            "vercel --prod",
+        ]
+    else:
+        raise typer.BadParameter("Provider must be railway, render, or vercel")
+
+    if kind == "python":
+        lines += ["Build: pip install -r requirements.txt", "Start: python main.py"]
+    elif kind == "fastapi":
+        lines += ["Build: pip install -r requirements.txt", "Start: uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+    elif kind == "vite":
+        lines += ["Build: npm install && npm run build", "Start: npm run dev (or serve dist)"]
+    else:
+        lines += ["Could not auto-detect project type; set build/start commands manually."]
+
+    _audit().write("deploy", {"in": str(project_dir), "provider": provider, "kind": kind})
+    console.print(Panel.fit("\n".join(lines), title="deploy"))
