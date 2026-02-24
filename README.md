@@ -22,6 +22,7 @@ python -m pip install -e .
 triad369 init
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
+# also writes build/hello369/artifact.manifest.json
 python -m build
 python -m twine check dist/*
 ```
@@ -36,6 +37,7 @@ python -m pip install -e .
 triad369 init
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
+# also writes build/hello369/artifact.manifest.json
 python -m build
 python -m twine check dist/*
 ```
@@ -46,6 +48,12 @@ python -m twine check dist/*
 ### Python compatibility
 - Python 3.11+ uses the standard-library `tomllib`.
 - Python 3.10 automatically uses `tomli` (installed via package dependency).
+
+## Config layering (3-6-9 priority)
+
+1. `.triad369/config.toml` defaults
+2. Environment variables override config
+3. CLI flags override both
 
 ## CoEvo publish (optional, but supported)
 
@@ -74,7 +82,9 @@ set COEVO_WEBHOOK_SECRET=   # only if you set it in CoEvo server
 
 ### Publish
 ```bash
-triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
+triad369 publish-coevo --board dev --title "Hello 369 demo" --in build/hello369
+# or provide --zip build/hello369.zip if already packed
+# optional repo tags: --tags "369,launchpad"
 ```
 
 ---

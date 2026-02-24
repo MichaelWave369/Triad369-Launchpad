@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 
 from launchpad.cli import app
 from launchpad.nevora_bridge import scaffold_fallback
-from launchpad.packager import zip_dir
+from launchpad.packager import build_manifest, write_manifest, zip_dir
 from typer.testing import CliRunner
 
 
@@ -23,6 +23,10 @@ def main() -> None:
         scaffold_dir = base / "fallback"
         scaffold_fallback("A tiny CLI that prints Hello 369", scaffold_dir)
         assert (scaffold_dir / "main.py").exists(), "fallback scaffold must create main.py"
+
+        manifest = build_manifest(scaffold_dir, project_name="fallback", target="python", prompt="hello")
+        manifest_path = write_manifest(scaffold_dir, manifest)
+        assert manifest_path.exists(), "packager must write artifact.manifest.json"
 
         zip_path = base / "artifact.zip"
         zip_dir(scaffold_dir, zip_path)
