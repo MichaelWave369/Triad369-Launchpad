@@ -1,0 +1,125 @@
+# Triad369 Launchpad ⚡️ (Spec → Generate → Ship)
+
+Your **3rd pillar** repo to complete the 3-6-9 triad:
+
+1) **CoEvo** = co-creation, bounties, threads, artifacts  
+2) **Nevora** = natural-language → starter code  
+3) **Triad369 Launchpad** = turns Nevora output into a *shippable project* and publishes it to CoEvo
+
+**Goal:** one command to go from *idea/spec* → *project scaffold* → *zip artifact* → *CoEvo thread* (+ optional repo link).
+
+---
+
+## Quickstart (local)
+
+```bash
+# 1) Create venv
+python -m venv .venv
+# Windows
+.\.venv\Scripts\activate
+# macOS/Linux
+# source .venv/bin/activate
+
+# 2) Install
+pip install -e .
+
+# 3) Initialize local config
+triad369 init
+
+# 4) Run a demo generate + pack (no external services required)
+triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
+triad369 pack --in build/hello369 --zip build/hello369.zip
+```
+
+---
+
+## CoEvo publish (optional, but supported)
+
+This repo ships a **CoEvo API client** that:
+- logs in (`/api/auth/login`)
+- lists boards (`/api/boards`)
+- creates a thread (`POST /api/boards/{board_id}/threads`)
+- uploads a zip (`POST /api/artifacts/upload`)
+- attaches it to the thread (`POST /api/artifacts/{artifact_id}/attach/thread/{thread_id}`)
+- optionally adds a repo link (`POST /api/repos`)
+
+Those endpoints exist in your CoEvo server today. (See CoEvo router files.)
+
+### Configure
+Set env vars (or put them in your shell profile):
+
+```bash
+# required
+set COEVO_BASE_URL=http://localhost:8000
+set COEVO_HANDLE=admin
+set COEVO_PASSWORD=change-me
+
+# optional
+set COEVO_WEBHOOK_SECRET=   # only if you set it in CoEvo server
+```
+
+### Publish
+```bash
+triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
+```
+
+---
+
+## Nevora integration options
+
+Launchpad supports **two** ways to use Nevora:
+
+### A) CLI adapter (recommended)
+Install Nevora locally (e.g. in a sibling folder), then:
+
+```bash
+pip install -e ../Nevora-Translator
+```
+
+Launchpad will call:
+
+```bash
+python -m translator.cli --target <target> --prompt "<prompt>" --scaffold-dir <out>
+```
+
+### B) Fallback (works even without Nevora)
+If Nevora isn't installed, Launchpad generates a minimal scaffold (so the pipeline still works).
+
+---
+
+## 3-6-9 structure (built-in)
+
+**3 Modes:** Build • Share • Ship  
+**6 Modules:** Spec • Nevora • Packager • CoEvo • Deploy • Audit  
+**9 Commands:** init • generate • run • test • pack • publish-github • publish-coevo • deploy • status
+
+(Some commands are stubs right now—perfect for OSS contributions.)
+
+---
+
+## Example specs
+
+- `examples/spec_python_cli.toml`
+- `examples/spec_fastapi.toml`
+- `examples/spec_react_vite.toml`
+
+Use them like:
+
+```bash
+triad369 generate --spec examples/spec_python_cli.toml --out build/myapp
+triad369 pack --in build/myapp --zip build/myapp.zip
+```
+
+---
+
+## Roadmap (v0.x)
+
+- [ ] Add “publish-github” (create repo + push) using a personal access token
+- [ ] Add deploy helpers for Railway/Render/Vercel (non-destructive, guide-only)
+- [ ] Add Nevora “batch” mode: generate 3 options → pick best
+- [ ] Add CoEvo bounty auto-creation with 3/6/9 reward presets
+
+---
+
+## License
+MIT (same vibe as your other repos).

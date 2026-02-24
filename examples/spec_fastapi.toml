@@ -1,0 +1,9 @@
+name = "api369"
+prompt = "A FastAPI app with a /health endpoint and a /hello endpoint returning Hello 369."
+target = "web-backend"
+mode = "web-backend"
+source_language = "english"
+
+pack_zip_name = "api369.zip"
+coevo_board_slug = "dev"
+coevo_thread_title = "API369 — FastAPI scaffold"

@@ -1,0 +1,9 @@
+name = "hello369"
+prompt = "A tiny Python CLI that prints Hello 369 and shows today's date."
+target = "python"
+mode = "automation"
+source_language = "english"
+
+pack_zip_name = "hello369.zip"
+coevo_board_slug = "dev"
+coevo_thread_title = "Hello369 — first Launchpad build"

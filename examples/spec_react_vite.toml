@@ -1,0 +1,9 @@
+name = "ui369"
+prompt = "A Vite+React app with a landing page titled Wave 369 and 3 feature cards."
+target = "javascript"
+mode = "automation"
+source_language = "english"
+
+pack_zip_name = "ui369.zip"
+coevo_board_slug = "dev"
+coevo_thread_title = "UI369 — React scaffold"
