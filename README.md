@@ -12,26 +12,48 @@ Your **3rd pillar** repo to complete the 3-6-9 triad:
 
 ## Quickstart (local)
 
-```bash
-# 1) Create venv
+### Windows (PowerShell)
+```powershell
 python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip setuptools wheel build twine
+python -m pip install -e .
 
-# 2) Install
-pip install -e .
-
-# 3) Initialize local config
 triad369 init
-
-# 4) Run a demo generate + pack (no external services required)
 triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
 triad369 pack --in build/hello369 --zip build/hello369.zip
+# also writes build/hello369/artifact.manifest.json
+python -m build
+python -m twine check dist/*
+```
+
+### macOS/Linux (bash/zsh)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip setuptools wheel build twine
+python -m pip install -e .
+
+triad369 init
+triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
+triad369 pack --in build/hello369 --zip build/hello369.zip
+# also writes build/hello369/artifact.manifest.json
+python -m build
+python -m twine check dist/*
 ```
 
 ---
+
+
+### Python compatibility
+- Python 3.11+ uses the standard-library `tomllib`.
+- Python 3.10 automatically uses `tomli` (installed via package dependency).
+
+## Config layering (3-6-9 priority)
+
+1. `.triad369/config.toml` defaults
+2. Environment variables override config
+3. CLI flags override both
 
 ## CoEvo publish (optional, but supported)
 
@@ -60,7 +82,9 @@ set COEVO_WEBHOOK_SECRET=   # only if you set it in CoEvo server
 
 ### Publish
 ```bash
-triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
+triad369 publish-coevo --board dev --title "Hello 369 demo" --in build/hello369
+# or provide --zip build/hello369.zip if already packed
+# optional repo tags: --tags "369,launchpad"
 ```
 
 ---
@@ -93,7 +117,7 @@ If Nevora isn't installed, Launchpad generates a minimal scaffold (so the pipeli
 **6 Modules:** Spec • Nevora • Packager • CoEvo • Deploy • Audit  
 **9 Commands:** init • generate • run • test • pack • publish-github • publish-coevo • deploy • status
 
-(Some commands are stubs right now—perfect for OSS contributions.)
+Core commands are now implemented for day-to-day Spec → Generate → Run/Test → Pack → Publish flow.
 
 ---
 
@@ -111,6 +135,43 @@ triad369 pack --in build/myapp --zip build/myapp.zip
 ```
 
 ---
+
+
+## Run, test, and publish GitHub (v0.3)
+
+```bash
+# Run with auto-detection
+triad369 run --in build/hello369
+
+# Test with auto-detection (pytest if available, otherwise unittest)
+triad369 test --in build/hello369
+
+# Publish to GitHub (uses gh CLI if installed; otherwise prints manual commands)
+triad369 publish-github --name your-org/hello369 --in build/hello369
+```
+
+
+## Bridge helpers (v0.4)
+
+```bash
+# Generate 3 variants (3/6/9 style) and pick preferred winner
+triad369 generate-batch --prompt "A tiny CLI that prints Hello 369" --target python --out build/batch369 --pick 1
+
+# Create a 3/6/9 bounty plan from a spec for CoEvo workflows
+triad369 bounty-plan --spec examples/spec_python_cli.toml --out build/bounty_plan_369.json
+
+# Simulate a webhook event payload and generate automatically
+triad369 simulate-webhook --payload examples/webhook_payload.json --out build/webhook369
+
+# Bridge an existing CoEvo thread into a generated scaffold
+triad369 bridge-thread --thread-id 123 --out build/thread369 --target python
+```
+
+## Validation smoke script
+
+```bash
+python scripts/smoke_checks.py
+```
 
 ## Roadmap (v0.x)
 
