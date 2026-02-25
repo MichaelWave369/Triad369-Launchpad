@@ -27,6 +27,19 @@ streamlit = [
   "tomli>=2.0.1; python_version < '3.11'",
 ]
 
+[tool.setuptools.packages.find]
+include = ["launchpad*"]
+
+[project.optional-dependencies]
+streamlit = [
+  "streamlit>=1.32",
+  "pillow>=10.0",
+  "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[tool.setuptools]
+packages = ["launchpad"]
+
 [project.scripts]
 triad369 = "launchpad.cli:app"
 
