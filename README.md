@@ -1,125 +1,168 @@
-# Triad369 Launchpad ⚡️ (Spec → Generate → Ship)
+# Triad369 Launchpad Hub ⚡️
 
-Your **3rd pillar** repo to complete the 3-6-9 triad:
+Triad369 Launchpad is now a **local-first hub/orchestrator/packager/publisher** for your connected apps.
 
-1) **CoEvo** = co-creation, bounties, threads, artifacts  
-2) **Nevora** = natural-language → starter code  
-3) **Triad369 Launchpad** = turns Nevora output into a *shippable project* and publishes it to CoEvo
-
-**Goal:** one command to go from *idea/spec* → *project scaffold* → *zip artifact* → *CoEvo thread* (+ optional repo link).
+It supports:
+- Spec → Generate → Pack → Publish workflows
+- App workspace orchestration via `triad369 apps ...`
+- Manifest-based artifact integrity (`artifact.manifest.json` + verification)
+- Optional CoEvo publishing
+- Streamlit dashboard mode (cloud-safe)
 
 ---
 
-## Quickstart (local)
+## What Launchpad Hub does
+
+### 1) Hub Orchestration (local-first)
+- Registry-driven app management (`.triad369/apps.toml`)
+- Workspace sync to `.triad369/workspace/`
+- App lifecycle helpers: list/sync/install/run/stop/status/open
+- Port-safe runtime tracking in `.triad369/runtime.json`
+
+### 2) Packaging + Verification
+- Standardized zip packaging
+- `artifact.manifest.json` with SHA256 hashes
+- Directory and zip verification commands
+
+### 3) Optional CoEvo publishing
+- Package zip upload + thread publish via configured `COEVO_*` env vars
+- No hidden outbound calls (network is explicit: git + optional CoEvo)
+
+### 4) Streamlit cloud-safe UI
+- Entry point: `streamlit_app.py`
+- Cloud mode avoids long-running subprocess orchestration
+- Supports repo links, source zip links, capsule export, snapshot export
+
+---
+
+## Quickstart (CLI)
 
 ```bash
-# 1) Create venv
+# Setup
 python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+source .venv/bin/activate
+pip install -e .[streamlit]
 
-# 2) Install
-pip install -e .
-
-# 3) Initialize local config
+# Initialize config + registry + workspace
 triad369 init
 
-# 4) Run a demo generate + pack (no external services required)
-triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
-triad369 pack --in build/hello369 --zip build/hello369.zip
+# Hub checks
+triad369 apps doctor
+triad369 apps list
+
+# Default orchestrator flow
+triad369 up
+triad369 hub
+triad369 down
 ```
 
 ---
 
-## CoEvo publish (optional, but supported)
-
-This repo ships a **CoEvo API client** that:
-- logs in (`/api/auth/login`)
-- lists boards (`/api/boards`)
-- creates a thread (`POST /api/boards/{board_id}/threads`)
-- uploads a zip (`POST /api/artifacts/upload`)
-- attaches it to the thread (`POST /api/artifacts/{artifact_id}/attach/thread/{thread_id}`)
-- optionally adds a repo link (`POST /api/repos`)
-
-Those endpoints exist in your CoEvo server today. (See CoEvo router files.)
-
-### Configure
-Set env vars (or put them in your shell profile):
+## Core Hub commands
 
 ```bash
-# required
-set COEVO_BASE_URL=http://localhost:8000
-set COEVO_HANDLE=admin
-set COEVO_PASSWORD=change-me
+triad369 apps list
+triad369 apps sync --all
+triad369 apps install --all
+triad369 apps run --all
+triad369 apps stop --all
+triad369 apps status
+triad369 apps open coevo-api
 
-# optional
-set COEVO_WEBHOOK_SECRET=   # only if you set it in CoEvo server
+triad369 apps pack coevo-api --out build/coevo-api.zip
+triad369 apps verify coevo-api --zip build/coevo-api.zip
+triad369 apps capsule coevo-api --out build/coevo-api.capsule.json
+triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
 ```
 
-### Publish
+Top-level helpers:
+
 ```bash
+triad369 snapshot --out build/triad-snapshot.png
+triad369 verify-artifact --zip build/hello369.zip
+```
+
+---
+
+## Streamlit Mode
+
+### Local run
+```bash
+pip install -e .[streamlit]
+streamlit run streamlit_app.py
+```
+
+### Streamlit Cloud deploy checklist
+1. Main file path: **`streamlit_app.py`** (not `launchpad/__init__.py`)
+2. `requirements.txt` should contain `-e .[streamlit]`
+3. Keep `.streamlit/config.toml` committed
+
+### Cloud mode limitations
+- No subprocess farm orchestration by default
+- Use cloud-safe actions only:
+  - repo links
+  - source zip links
+  - capsule export JSON
+  - snapshot PNG generation/download
+
+---
+
+## App Registry Concept
+
+The hub registry lives at:
+- `.triad369/apps.toml`
+
+Each app entry defines core metadata such as:
+- name, repo URL, app type
+- stack hints, capsule mode
+- default port range
+- install/start/test/build commands
+- optional health path
+
+You can edit this file to add/adjust apps and commands safely.
+
+---
+
+## Packaging + CoEvo publishing
+
+```bash
+triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
+triad369 pack --in build/hello369 --zip build/hello369.zip
+triad369 verify-artifact --zip build/hello369.zip
+
+# Optional if COEVO_* env vars are set
 triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
 ```
 
 ---
 
-## Nevora integration options
+## Troubleshooting
 
-Launchpad supports **two** ways to use Nevora:
+### Poetry install error: package not found
+- Ensure `pyproject.toml` includes:
+  - `[tool.poetry]`
+  - `packages = [{ include = "launchpad" }]`
+- Then run:
+  - `poetry check`
+  - `poetry install`
 
-### A) CLI adapter (recommended)
-Install Nevora locally (e.g. in a sibling folder), then:
-
+### TOML parse errors
+- Validate quickly:
 ```bash
-pip install -e ../Nevora-Translator
+python -c "import tomllib; tomllib.load(open('pyproject.toml','rb')); print('TOML OK')"
 ```
 
-Launchpad will call:
+### Streamlit Cloud wrong entrypoint
+- If Cloud points to `launchpad/__init__.py`, change it to `streamlit_app.py`.
 
+### Lockfile mismatch
+- Rebuild lockfile:
 ```bash
-python -m translator.cli --target <target> --prompt "<prompt>" --scaffold-dir <out>
+poetry lock
+poetry install
 ```
-
-### B) Fallback (works even without Nevora)
-If Nevora isn't installed, Launchpad generates a minimal scaffold (so the pipeline still works).
-
----
-
-## 3-6-9 structure (built-in)
-
-**3 Modes:** Build • Share • Ship  
-**6 Modules:** Spec • Nevora • Packager • CoEvo • Deploy • Audit  
-**9 Commands:** init • generate • run • test • pack • publish-github • publish-coevo • deploy • status
-
-(Some commands are stubs right now—perfect for OSS contributions.)
-
----
-
-## Example specs
-
-- `examples/spec_python_cli.toml`
-- `examples/spec_fastapi.toml`
-- `examples/spec_react_vite.toml`
-
-Use them like:
-
-```bash
-triad369 generate --spec examples/spec_python_cli.toml --out build/myapp
-triad369 pack --in build/myapp --zip build/myapp.zip
-```
-
----
-
-## Roadmap (v0.x)
-
-- [ ] Add “publish-github” (create repo + push) using a personal access token
-- [ ] Add deploy helpers for Railway/Render/Vercel (non-destructive, guide-only)
-- [ ] Add Nevora “batch” mode: generate 3 options → pick best
-- [ ] Add CoEvo bounty auto-creation with 3/6/9 reward presets
 
 ---
 
 ## License
-MIT (same vibe as your other repos).
+MIT
