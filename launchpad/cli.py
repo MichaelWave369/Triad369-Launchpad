@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import httpx
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +18,8 @@ from .packager import build_manifest, verify_manifest_dir, verify_manifest_zip, 
 from .specs import ProjectSpec
 from .utils import env, load_json, load_toml, write_text
 from .apps.detect import detect_package_manager, detect_stack
+from .bridge.contracts import capsule_from_app
+from .snapshot import build_snapshot_image, snapshot_rows_from_runtime
 from .apps.doctor import doctor_report
 from .apps.pack import should_exclude
 from .apps.publish import publish_zip_to_coevo
@@ -298,82 +301,62 @@ def bridge_thread(
         raise typer.Exit(code=2)
 
 
-@app.command("bridge-thread")
-def bridge_thread(
-    thread_id: int = typer.Option(..., "--thread-id", help="CoEvo thread ID to bridge"),
-    out: Path = typer.Option(Path("build/thread369"), "--out", help="Output directory"),
-    target: str = typer.Option("python", "--target", help="Generation target"),
-    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
-    board: Optional[str] = typer.Option(None, "--board", help="Board slug override (for URL display)"),
-) -> None:
-    """Fetch a CoEvo thread and generate a scaffold from title + latest post."""
-    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
-    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
-    client = CoEvoClient.from_env(base_url_override=base_url)
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
 
-    thread = client.get_thread(thread_id)
-    posts = client.list_thread_posts(thread_id)
-    title = str(thread.get("title", f"Thread {thread_id}"))
-    latest_post = ""
-    if posts:
-        latest = posts[-1]
-        latest_post = str(latest.get("content_md", ""))
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
 
-    prompt = f"{title}\n\n{latest_post}".strip()
-    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
-
-    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
-    _audit().write(
-        "bridge_thread",
-        {"thread_id": thread_id, "thread_url": thread_url, "out": str(out), "ok": ok, "engine": engine},
-    )
-    console.print(
-        Panel.fit(
-            f"Thread: {thread_id}\nURL: {thread_url}\nOut: {out}\nEngine: {engine}\nResult: {message[:500]}",
-            title="bridge-thread",
-        )
-    )
-    if not ok:
-        raise typer.Exit(code=2)
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
-@app.command("bridge-thread")
-def bridge_thread(
-    thread_id: int = typer.Option(..., "--thread-id", help="CoEvo thread ID to bridge"),
-    out: Path = typer.Option(Path("build/thread369"), "--out", help="Output directory"),
-    target: str = typer.Option("python", "--target", help="Generation target"),
-    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
-    board: Optional[str] = typer.Option(None, "--board", help="Board slug override (for URL display)"),
-) -> None:
-    """Fetch a CoEvo thread and generate a scaffold from title + latest post."""
-    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
-    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
-    client = CoEvoClient.from_env(base_url_override=base_url)
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
 
-    thread = client.get_thread(thread_id)
-    posts = client.list_thread_posts(thread_id)
-    title = str(thread.get("title", f"Thread {thread_id}"))
-    latest_post = ""
-    if posts:
-        latest = posts[-1]
-        latest_post = str(latest.get("content_md", ""))
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
 
-    prompt = f"{title}\n\n{latest_post}".strip()
-    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
 
-    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
-    _audit().write(
-        "bridge_thread",
-        {"thread_id": thread_id, "thread_url": thread_url, "out": str(out), "ok": ok, "engine": engine},
-    )
-    console.print(
-        Panel.fit(
-            f"Thread: {thread_id}\nURL: {thread_url}\nOut: {out}\nEngine: {engine}\nResult: {message[:500]}",
-            title="bridge-thread",
-        )
-    )
-    if not ok:
-        raise typer.Exit(code=2)
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command()
@@ -781,7 +764,7 @@ def apps_list() -> None:
         info = rt.get("apps", {}).get(a.name, {}) if isinstance(rt.get("apps", {}), dict) else {}
         running = bool(info.get("running", False))
         port = info.get("port", "-")
-        rows.append(f"- {a.name} [{a.app_type}] path={a.path} running={running} port={port}")
+        rows.append(f"- {a.name} [{a.app_type}] category={a.category} path={a.path} running={running} port={port} :: {a.description}")
     console.print("\n".join(rows), markup=False)
 
 
@@ -878,11 +861,27 @@ def apps_stop(name: Optional[str] = typer.Argument(None), all_apps: bool = typer
 
 @apps_app.command("status")
 def apps_status() -> None:
+    apps = _ensure_hub_files()
     rt = load_runtime(_runtime_path())
     rows = []
-    for name, info in (rt.get("apps", {}) or {}).items():
-        rows.append(f"- {name}: running={info.get('running', False)} pid={info.get('pid', '-')} port={info.get('port', '-')}")
-    console.print("\n".join(rows) if rows else "No running apps recorded")
+    for a in apps:
+        info = (rt.get("apps", {}) or {}).get(a.name, {})
+        repo_dir = _workspace_root() / a.path
+        detected = detect_stack(repo_dir) if repo_dir.exists() else a.stack_hint or a.app_type
+        running = info.get('running', False)
+        port = info.get('port', '-')
+        health = "-"
+        if running and a.capsule_mode == "http" and a.health_path and isinstance(port, int):
+            url = f"http://127.0.0.1:{port}{a.health_path}"
+            try:
+                r = httpx.get(url, timeout=2)
+                health = str(r.status_code)
+            except Exception:
+                health = "down"
+        rows.append(
+            f"- {a.name}: stack={detected} running={running} pid={info.get('pid', '-')} port={port} health={health}"
+        )
+    console.print("\n".join(rows) if rows else "No apps configured")
 
 
 @apps_app.command("open")
@@ -951,6 +950,26 @@ def apps_verify(name: str, zip_path: Path = typer.Option(..., "--zip")) -> None:
     console.print(f"✅ Verified {name}: {zip_path}")
 
 
+@apps_app.command("capsule")
+def apps_capsule(
+    name: str,
+    out: Path = typer.Option(Path("build"), "--out", help="Output file or directory"),
+) -> None:
+    apps = _ensure_hub_files()
+    a = app_by_name(apps, name)
+    if not a:
+        raise typer.BadParameter(f"Unknown app: {name}")
+    repo_dir = _workspace_root() / a.path
+    detected = detect_stack(repo_dir) if repo_dir.exists() else a.stack_hint or a.app_type
+    capsule = capsule_from_app(a, detected_stack=detected)
+    if out.suffix == ".json":
+        out_path = out
+    else:
+        out_path = out / f"{name}.capsule.json"
+    write_text(out_path, json.dumps(capsule, indent=2) + "\n")
+    console.print(f"✅ Capsule written: {out_path}")
+
+
 @apps_app.command("publish-coevo")
 def apps_publish_coevo(
     name: str,
@@ -966,6 +985,17 @@ def apps_publish_coevo(
     result = publish_zip_to_coevo(zip_path=zip_path, title=title, board=board, summary=summary, repo_url=a.repo_url)
     console.print(Panel.fit(f"✅ Published {name}\nThread: {result['thread_id']}\nArtifact: {result['artifact_id']}", title="apps publish-coevo"))
 
+
+
+
+@app.command("snapshot")
+def snapshot(out: Path = typer.Option(Path("build/triad-snapshot.png"), "--out", help="Output PNG path")) -> None:
+    """Generate a PNG status card snapshot for Hub apps."""
+    apps = _ensure_hub_files()
+    rt = load_runtime(_runtime_path())
+    rows = snapshot_rows_from_runtime([{"name": a.name, "repo_url": a.repo_url} for a in apps], rt)
+    img = build_snapshot_image(out_path=out, title="Triad369 Hub Snapshot", rows=rows)
+    console.print(f"✅ Snapshot: {img}")
 
 @app.command()
 def up() -> None:
@@ -991,10 +1021,13 @@ def down() -> None:
 @app.command()
 def hub() -> None:
     """Show hub URLs + runtime status table."""
+    mode = "cloud" if env("STREAMLIT_SERVER_RUNNING") else "local"
     rt = load_runtime(_runtime_path())
     rows = []
     for name, info in (rt.get("apps", {}) or {}).items():
         port = info.get("port")
         url = f"http://127.0.0.1:{port}" if port else "-"
         rows.append(f"- {name}: running={info.get('running', False)} url={url}")
-    console.print("\n".join(rows) if rows else "Hub runtime is empty")
+    header = f"Hub mode: {mode}"
+    body = "\n".join(rows) if rows else "Hub runtime is empty"
+    console.print(Panel.fit(f"{header}\n{body}", title="hub"))

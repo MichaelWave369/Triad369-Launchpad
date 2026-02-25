@@ -12,6 +12,8 @@ def detect_stack(repo_dir: Path) -> str:
         return "vite"
     if (repo_dir / "app" / "main.py").exists():
         return "fastapi"
+    if (repo_dir / "translator" / "cli.py").exists():
+        return "python-cli"
     if (repo_dir / "pyproject.toml").exists() or (repo_dir / "requirements.txt").exists():
         return "python"
     if (repo_dir / "index.html").exists() and ((repo_dir / "app.js").exists() or (repo_dir / "main.js").exists()):

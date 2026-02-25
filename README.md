@@ -190,6 +190,7 @@ triad369 apps doctor
 triad369 apps list
 triad369 up
 triad369 hub
+triad369 snapshot --out build/triad-snapshot.png
 triad369 down
 ```
 
@@ -212,6 +213,7 @@ triad369 apps open coevo-api
 
 triad369 apps pack coevo-api --out build/coevo-api.zip
 triad369 apps verify coevo-api --zip build/coevo-api.zip
+triad369 apps capsule coevo-api --out build/coevo-api.capsule.json
 triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
 ```
 
@@ -219,6 +221,29 @@ triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip 
 - Local-first by default (no hidden telemetry/scraping).
 - Network calls are explicit (`git clone/pull` and optional CoEvo publish).
 - Port allocation is collision-aware within configured app port ranges.
+
+
+## Streamlit Mode (Cloud + Local)
+
+### Local run
+```bash
+pip install -e .[streamlit]
+streamlit run streamlit_app.py
+```
+
+### Streamlit Cloud deploy
+1. Set app entrypoint to `streamlit_app.py`.
+2. Keep `requirements.txt` as `-e .[streamlit]`.
+3. `.streamlit/config.toml` is included with safe defaults.
+
+### Cloud Mode limitations
+- No long-running subprocess farms by default.
+- Use cloud-safe actions: repo links, source zip links, capsule export, snapshot PNG export.
+- Use local CLI for sync/install/run/stop workflows.
+
+### Snapshot + Capsule
+- CLI snapshot: `triad369 snapshot --out build/triad-snapshot.png`
+- CLI capsule: `triad369 apps capsule <name> --out build/<name>.capsule.json`
 
 ## Validation smoke script
 
