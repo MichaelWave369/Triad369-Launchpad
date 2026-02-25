@@ -58,10 +58,11 @@ def scaffold_fallback(prompt: str, out_dir: Path) -> NevoraResult:
     """Fallback scaffold so the pipeline works even if Nevora isn't installed."""
     out_dir.mkdir(parents=True, exist_ok=True)
     main_py = out_dir / "main.py"
+    escaped_prompt = prompt.replace("'", "\\'")
     content = (
         "def main():\n"
-        f"    print('Hello 369!')\n"
-        f"    print('Prompt: {prompt.replace("'", "\\'")}')\n\n"
+        "    print('Hello 369!')\n"
+        f"    print('Prompt: {escaped_prompt}')\n\n"
         "if __name__ == '__main__':\n"
         "    main()\n"
     )

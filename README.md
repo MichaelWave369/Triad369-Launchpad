@@ -1,125 +1,148 @@
-# Triad369 Launchpad ⚡️ (Spec → Generate → Ship)
+# Triad369-Launchpad (Triad Hub)
 
-Your **3rd pillar** repo to complete the 3-6-9 triad:
+**Triad369-Launchpad** is the **local-first hub** that connects and orchestrates your Triad ecosystem: it can **sync**, **inspect**, **package**, and (optionally) **publish** your other apps from one place.
 
-1) **CoEvo** = co-creation, bounties, threads, artifacts  
-2) **Nevora** = natural-language → starter code  
-3) **Triad369 Launchpad** = turns Nevora output into a *shippable project* and publishes it to CoEvo
-
-**Goal:** one command to go from *idea/spec* → *project scaffold* → *zip artifact* → *CoEvo thread* (+ optional repo link).
+- **Default:** local-first + offline-friendly (no telemetry, no scraping)
+- **Modes:**
+  - **Local Hub (CLI):** manage repos on your machine
+  - **Streamlit Hub (Dashboard):** cloud-safe UI for browsing/exporting/snapshotting (no long-running subprocess orchestration in cloud)
 
 ---
 
-## Quickstart (local)
+## What it does
 
+### Hub Orchestration
+- Sync (clone/pull) multiple GitHub repos into a local workspace
+- Detect each repo’s stack (Python / FastAPI / Streamlit / Next.js / Vite / static)
+- Show status + recommended run commands
+
+### Packaging
+- Build consistent **artifact ZIPs** for any registered app
+- Output an `artifact.manifest.json` with checksums
+- Exclude junk folders like `.git/`, `node_modules/`, `.venv/`, caches, local DBs
+
+### Optional Publishing (CoEvo)
+- If configured, Launchpad can publish packaged artifacts to CoEvo
+- Publishing is **opt-in** and requires explicit environment variables
+
+### Snapshot (PNG)
+- Generate a downloadable **status-card image** (PNG) summarizing your Hub state
+
+---
+
+## Quickstart (Local Hub)
+
+### Requirements
+- Python 3.12+
+- Poetry
+- Git
+
+### Install
 ```bash
-# 1) Create venv
-python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+poetry install
+```
 
-# 2) Install
-pip install -e .
+### Initialize + inspect
+```bash
+poetry run triad369 init
+poetry run triad369 apps doctor
+poetry run triad369 apps list
+```
 
-# 3) Initialize local config
-triad369 init
+### Sync workspace
+```bash
+poetry run triad369 apps sync --all
+```
 
-# 4) Run a demo generate + pack (no external services required)
-triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
-triad369 pack --in build/hello369 --zip build/hello369.zip
+### Package a registered app
+```bash
+poetry run triad369 apps pack coevo-api --out build/coevo-api.zip
+poetry run triad369 apps verify coevo-api --zip build/coevo-api.zip
+```
+
+### Generate a Hub snapshot image
+```bash
+poetry run triad369 snapshot --out build/triad-snapshot.png
 ```
 
 ---
 
-## CoEvo publish (optional, but supported)
+## Streamlit Hub (Cloud-safe)
 
-This repo ships a **CoEvo API client** that:
-- logs in (`/api/auth/login`)
-- lists boards (`/api/boards`)
-- creates a thread (`POST /api/boards/{board_id}/threads`)
-- uploads a zip (`POST /api/artifacts/upload`)
-- attaches it to the thread (`POST /api/artifacts/{artifact_id}/attach/thread/{thread_id}`)
-- optionally adds a repo link (`POST /api/repos`)
-
-Those endpoints exist in your CoEvo server today. (See CoEvo router files.)
-
-### Configure
-Set env vars (or put them in your shell profile):
+Run locally:
 
 ```bash
-# required
-set COEVO_BASE_URL=http://localhost:8000
-set COEVO_HANDLE=admin
-set COEVO_PASSWORD=change-me
-
-# optional
-set COEVO_WEBHOOK_SECRET=   # only if you set it in CoEvo server
+poetry run streamlit run streamlit_app.py
 ```
 
-### Publish
+### Streamlit Cloud settings
+- **Main file path must be:** `streamlit_app.py`
+- Keep `.streamlit/config.toml` in repo
+- Keep `requirements.txt` using `-e .[streamlit]`
+
+### Cloud mode behavior
+In constrained cloud environments, the dashboard is intentionally safe:
+- shows app metadata and links
+- supports capsule export + snapshot download
+- does **not** start long-running local subprocess fleets by default
+
+---
+
+## App Registry
+
+Launchpad uses a registry file at:
+
+- `.triad369/apps.toml`
+
+Each app entry can define:
+- name + repo URL
+- stack hints and health path
+- default ports
+- install/run/test/build commands
+- packaging and capsule behavior
+
+---
+
+## Optional CoEvo publish
+
+When `COEVO_*` environment variables are configured, you can publish packaged artifacts:
+
 ```bash
-triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
+poetry run triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
 ```
 
 ---
 
-## Nevora integration options
+## Troubleshooting
 
-Launchpad supports **two** ways to use Nevora:
+### Poetry install/package issues
+If packaging fails, confirm `pyproject.toml` includes:
 
-### A) CLI adapter (recommended)
-Install Nevora locally (e.g. in a sibling folder), then:
+- `[tool.poetry]`
+- `packages = [{ include = "launchpad" }]`
 
-```bash
-pip install -e ../Nevora-Translator
-```
-
-Launchpad will call:
+Then run:
 
 ```bash
-python -m translator.cli --target <target> --prompt "<prompt>" --scaffold-dir <out>
+poetry check
+poetry install
 ```
 
-### B) Fallback (works even without Nevora)
-If Nevora isn't installed, Launchpad generates a minimal scaffold (so the pipeline still works).
-
----
-
-## 3-6-9 structure (built-in)
-
-**3 Modes:** Build • Share • Ship  
-**6 Modules:** Spec • Nevora • Packager • CoEvo • Deploy • Audit  
-**9 Commands:** init • generate • run • test • pack • publish-github • publish-coevo • deploy • status
-
-(Some commands are stubs right now—perfect for OSS contributions.)
-
----
-
-## Example specs
-
-- `examples/spec_python_cli.toml`
-- `examples/spec_fastapi.toml`
-- `examples/spec_react_vite.toml`
-
-Use them like:
-
+### TOML parse check
 ```bash
-triad369 generate --spec examples/spec_python_cli.toml --out build/myapp
-triad369 pack --in build/myapp --zip build/myapp.zip
+python -c "import tomllib; tomllib.load(open('pyproject.toml','rb')); print('TOML OK')"
 ```
 
----
+### Streamlit Cloud wrong entrypoint
+If Cloud points to `launchpad/__init__.py`, change it to `streamlit_app.py`.
 
-## Roadmap (v0.x)
-
-- [ ] Add “publish-github” (create repo + push) using a personal access token
-- [ ] Add deploy helpers for Railway/Render/Vercel (non-destructive, guide-only)
-- [ ] Add Nevora “batch” mode: generate 3 options → pick best
-- [ ] Add CoEvo bounty auto-creation with 3/6/9 reward presets
+### Lockfile mismatch
+```bash
+poetry lock
+poetry install
+```
 
 ---
 
 ## License
-MIT (same vibe as your other repos).
+MIT
