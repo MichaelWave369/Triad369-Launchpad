@@ -178,6 +178,48 @@ triad369 simulate-webhook --payload examples/webhook_payload.json --out build/we
 triad369 bridge-thread --thread-id 123 --out build/thread369 --target python
 ```
 
+
+## Launchpad Hub (v1.0)
+
+Triad369-Launchpad now includes a local-first **workspace orchestrator** for your other apps.
+
+### Hub quickstart
+```bash
+triad369 init
+triad369 apps doctor
+triad369 apps list
+triad369 up
+triad369 hub
+triad369 down
+```
+
+### Workspace + registry
+- Workspace root: `.triad369/workspace/`
+- App registry: `.triad369/apps.toml`
+- Runtime state: `.triad369/runtime.json`
+
+To add/update an app, edit `.triad369/apps.toml` with name/repo/type/port ranges and commands.
+
+### Core Hub commands
+```bash
+triad369 apps list
+triad369 apps sync --all
+triad369 apps install --all
+triad369 apps run --all
+triad369 apps stop --all
+triad369 apps status
+triad369 apps open coevo-api
+
+triad369 apps pack coevo-api --out build/coevo-api.zip
+triad369 apps verify coevo-api --zip build/coevo-api.zip
+triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
+```
+
+### Safety defaults
+- Local-first by default (no hidden telemetry/scraping).
+- Network calls are explicit (`git clone/pull` and optional CoEvo publish).
+- Port allocation is collision-aware within configured app port ranges.
+
 ## Validation smoke script
 
 ```bash

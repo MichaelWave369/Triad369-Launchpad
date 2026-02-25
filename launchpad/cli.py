@@ -16,6 +16,13 @@ from .nevora_bridge import nevora_installed, scaffold_fallback, scaffold_with_ne
 from .packager import build_manifest, verify_manifest_dir, verify_manifest_zip, write_manifest, zip_dir
 from .specs import ProjectSpec
 from .utils import env, load_json, load_toml, write_text
+from .apps.detect import detect_package_manager, detect_stack
+from .apps.doctor import doctor_report
+from .apps.pack import should_exclude
+from .apps.publish import publish_zip_to_coevo
+from .apps.registry import AppConfig, app_by_name, ensure_default_registry, load_registry
+from .apps.runner import allocate_port, mark_stopped, start_process, update_runtime_running
+from .apps.runtime import load_runtime
 
 app = typer.Typer(add_completion=False, help="Triad369 Launchpad — Spec → Generate → Ship")
 console = Console()
@@ -27,6 +34,24 @@ def _config_root() -> Path:
 
 def _audit() -> AuditLog:
     return AuditLog(_config_root())
+
+
+def _workspace_root() -> Path:
+    return _config_root() / "workspace"
+
+
+def _apps_registry_path() -> Path:
+    return _config_root() / "apps.toml"
+
+
+def _runtime_path() -> Path:
+    return _config_root() / "runtime.json"
+
+
+def _ensure_hub_files() -> list[AppConfig]:
+    _workspace_root().mkdir(parents=True, exist_ok=True)
+    ensure_default_registry(_apps_registry_path())
+    return load_registry(_apps_registry_path())
 
 
 def _load_spec(path: Path) -> ProjectSpec:
@@ -105,8 +130,10 @@ coevo_board_slug = "dev"
 # If you don't set COEVO_TOKEN, set COEVO_HANDLE + COEVO_PASSWORD as env vars.
 """
     write_text(root / "config.toml", default)
-    _audit().write("init", {"path": str(root / "config.toml")})
-    console.print(Panel.fit("✅ Initialized .triad369/config.toml", title="triad369 init"))
+    apps_path = ensure_default_registry(_apps_registry_path())
+    _workspace_root().mkdir(parents=True, exist_ok=True)
+    _audit().write("init", {"path": str(root / "config.toml"), "apps": str(apps_path)})
+    console.print(Panel.fit("✅ Initialized .triad369/config.toml\n✅ Initialized .triad369/apps.toml", title="triad369 init"))
 
 
 @app.command()
@@ -308,6 +335,103 @@ def bridge_thread(
     )
     if not ok:
         raise typer.Exit(code=2)
+
+
+@app.command("bridge-thread")
+def bridge_thread(
+    thread_id: int = typer.Option(..., "--thread-id", help="CoEvo thread ID to bridge"),
+    out: Path = typer.Option(Path("build/thread369"), "--out", help="Output directory"),
+    target: str = typer.Option("python", "--target", help="Generation target"),
+    mode: str = typer.Option("automation", "--mode", help="Generation mode"),
+    board: Optional[str] = typer.Option(None, "--board", help="Board slug override (for URL display)"),
+) -> None:
+    """Fetch a CoEvo thread and generate a scaffold from title + latest post."""
+    base_url = _resolve_setting(None, "COEVO_BASE_URL", "coevo_base_url", "http://localhost:8000")
+    board_slug = _resolve_setting(board, "COEVO_BOARD_SLUG", "coevo_board_slug", "dev")
+    client = CoEvoClient.from_env(base_url_override=base_url)
+
+    thread = client.get_thread(thread_id)
+    posts = client.list_thread_posts(thread_id)
+    title = str(thread.get("title", f"Thread {thread_id}"))
+    latest_post = ""
+    if posts:
+        latest = posts[-1]
+        latest_post = str(latest.get("content_md", ""))
+
+    prompt = f"{title}\n\n{latest_post}".strip()
+    ok, message, engine = _generate_project(prompt=prompt, target=target, mode=mode, out=out)
+
+    thread_url = f"{base_url.rstrip('/')}/boards/{board_slug}/threads/{thread_id}"
+    _audit().write(
+        "bridge_thread",
+        {"thread_id": thread_id, "thread_url": thread_url, "out": str(out), "ok": ok, "engine": engine},
+    )
+    console.print(
+        Panel.fit(
+            f"Thread: {thread_id}\nURL: {thread_url}\nOut: {out}\nEngine: {engine}\nResult: {message[:500]}",
+            title="bridge-thread",
+        )
+    )
+    if not ok:
+        raise typer.Exit(code=2)
+
+
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command()
@@ -629,3 +753,248 @@ def deploy(
 
     _audit().write("deploy", {"in": str(project_dir), "provider": provider, "kind": kind})
     console.print(Panel.fit("\n".join(lines), title="deploy"))
+
+
+
+apps_app = typer.Typer(help="Launchpad Hub app orchestration")
+app.add_typer(apps_app, name="apps")
+
+
+def _select_apps(name: Optional[str], all_apps: bool) -> list[AppConfig]:
+    apps = _ensure_hub_files()
+    if all_apps:
+        return apps
+    if name:
+        a = app_by_name(apps, name)
+        if not a:
+            raise typer.BadParameter(f"Unknown app: {name}")
+        return [a]
+    raise typer.BadParameter("Provide app name or --all")
+
+
+@apps_app.command("list")
+def apps_list() -> None:
+    apps = _ensure_hub_files()
+    rt = load_runtime(_runtime_path())
+    rows = []
+    for a in apps:
+        info = rt.get("apps", {}).get(a.name, {}) if isinstance(rt.get("apps", {}), dict) else {}
+        running = bool(info.get("running", False))
+        port = info.get("port", "-")
+        rows.append(f"- {a.name} [{a.app_type}] path={a.path} running={running} port={port}")
+    console.print("\n".join(rows), markup=False)
+
+
+@apps_app.command("doctor")
+def apps_doctor() -> None:
+    rep = doctor_report()
+    lines = [f"{k}: {'ok' if v else 'missing'}" for k, v in rep.items()]
+    console.print(Panel.fit("\n".join(lines), title="apps doctor"))
+
+
+@apps_app.command("sync")
+def apps_sync(name: Optional[str] = typer.Argument(None), all_apps: bool = typer.Option(False, "--all")) -> None:
+    apps = _select_apps(name, all_apps)
+    ws = _workspace_root()
+    for a in apps:
+        repo_root = ws / a.path.split("/")[0]
+        if not repo_root.exists():
+            _run_cmd(["git", "clone", a.repo_url, str(repo_root)], cwd=ws)
+        else:
+            _run_cmd(["git", "pull"], cwd=repo_root)
+    _audit().write("apps_sync", {"apps": [a.name for a in apps]})
+
+
+@apps_app.command("install")
+def apps_install(name: Optional[str] = typer.Argument(None), all_apps: bool = typer.Option(False, "--all")) -> None:
+    apps = _select_apps(name, all_apps)
+    ws = _workspace_root()
+    for a in apps:
+        workdir = ws / a.path
+        if not workdir.exists():
+            console.print(f"[yellow]Skip {a.name}: missing {workdir}[/yellow]")
+            continue
+        cmd = a.install_cmd.strip()
+        if not cmd:
+            console.print(f"[yellow]Skip {a.name}: no install_cmd[/yellow]")
+            continue
+        _run_cmd(cmd.split(), cwd=workdir)
+    _audit().write("apps_install", {"apps": [a.name for a in apps]})
+
+
+@apps_app.command("run")
+def apps_run(name: Optional[str] = typer.Argument(None), all_apps: bool = typer.Option(False, "--all")) -> None:
+    apps = _select_apps(name, all_apps)
+    ws = _workspace_root()
+    used: set[int] = set()
+    rt = load_runtime(_runtime_path())
+    for a in apps:
+        workdir = ws / a.path
+        if not workdir.exists():
+            console.print(f"[yellow]Skip {a.name}: missing {workdir}[/yellow]")
+            continue
+        if not a.start_cmd.strip():
+            console.print(f"[yellow]Skip {a.name}: WIP/no start command[/yellow]")
+            continue
+        port = allocate_port(a.default_port, a.port_max, used=used)
+        used.add(port)
+        cmd = a.start_cmd.replace("{PORT}", str(port))
+        env = dict(**__import__('os').environ)
+        env["PORT"] = str(port)
+        log_path = _config_root() / "logs" / f"{a.name}.log"
+        proc = start_process(cmd, cwd=workdir, log_path=log_path, env=env)
+        update_runtime_running(_runtime_path(), a.name, {
+            "pid": proc.pid,
+            "port": port,
+            "log": str(log_path),
+            "running": True,
+            "started_at": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+            "path": str(workdir),
+        })
+        console.print(f"✅ Started {a.name} on {port} (pid {proc.pid})")
+    _audit().write("apps_run", {"apps": [a.name for a in apps]})
+
+
+@apps_app.command("stop")
+def apps_stop(name: Optional[str] = typer.Argument(None), all_apps: bool = typer.Option(False, "--all")) -> None:
+    rt = load_runtime(_runtime_path())
+    all_rt = rt.get("apps", {}) if isinstance(rt.get("apps", {}), dict) else {}
+    targets = list(all_rt.keys()) if all_apps else ([name] if name else [])
+    if not targets:
+        raise typer.BadParameter("Provide app name or --all")
+    for n in targets:
+        info = all_rt.get(n, {})
+        pid = int(info.get("pid", 0)) if isinstance(info, dict) else 0
+        if pid > 0:
+            try:
+                import os, signal
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        mark_stopped(_runtime_path(), n)
+        console.print(f"✅ Stopped {n}")
+    _audit().write("apps_stop", {"apps": targets})
+
+
+@apps_app.command("status")
+def apps_status() -> None:
+    rt = load_runtime(_runtime_path())
+    rows = []
+    for name, info in (rt.get("apps", {}) or {}).items():
+        rows.append(f"- {name}: running={info.get('running', False)} pid={info.get('pid', '-')} port={info.get('port', '-')}")
+    console.print("\n".join(rows) if rows else "No running apps recorded")
+
+
+@apps_app.command("open")
+def apps_open(name: str) -> None:
+    rt = load_runtime(_runtime_path())
+    info = (rt.get("apps", {}) or {}).get(name, {})
+    port = info.get("port")
+    if not port:
+        raise typer.BadParameter(f"No runtime port found for {name}")
+    url = f"http://127.0.0.1:{port}"
+    console.print(url)
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
+@apps_app.command("pack")
+def apps_pack(
+    name: str,
+    out: Path = typer.Option(Path("build"), "--out", help="Zip output file or directory"),
+    include_build_output: bool = typer.Option(False, "--include-build-output"),
+) -> None:
+    apps = _ensure_hub_files()
+    a = app_by_name(apps, name)
+    if not a:
+        raise typer.BadParameter(f"Unknown app: {name}")
+    src = _workspace_root() / a.path
+    if not src.exists():
+        raise typer.BadParameter(f"Missing app directory: {src}")
+
+    tmp = _config_root() / "pack_tmp" / name
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True, exist_ok=True)
+    for p in src.rglob("*"):
+        if p.is_dir():
+            continue
+        rel = str(p.relative_to(src))
+        if should_exclude(rel, include_build_output=include_build_output):
+            continue
+        dest = tmp / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(p, dest)
+
+    manifest = build_manifest(tmp, project_name=name, target=a.app_type, prompt="")
+    write_manifest(tmp, manifest)
+    if out.suffix == ".zip":
+        zip_path = out
+    else:
+        zip_path = out / f"{name}.zip"
+    zip_dir(tmp, zip_path)
+    shutil.rmtree(tmp, ignore_errors=True)
+    console.print(f"✅ Packed {name} -> {zip_path}")
+
+
+@apps_app.command("verify")
+def apps_verify(name: str, zip_path: Path = typer.Option(..., "--zip")) -> None:
+    apps = _ensure_hub_files()
+    if not app_by_name(apps, name):
+        raise typer.BadParameter(f"Unknown app: {name}")
+    ok, errors = verify_manifest_zip(zip_path)
+    if not ok:
+        raise typer.BadParameter("; ".join(errors[:5]))
+    console.print(f"✅ Verified {name}: {zip_path}")
+
+
+@apps_app.command("publish-coevo")
+def apps_publish_coevo(
+    name: str,
+    board: str = typer.Option("dev", "--board"),
+    title: str = typer.Option(..., "--title"),
+    zip_path: Path = typer.Option(..., "--zip"),
+    summary: str = typer.Option("Published via Launchpad Hub", "--summary"),
+) -> None:
+    apps = _ensure_hub_files()
+    a = app_by_name(apps, name)
+    if not a:
+        raise typer.BadParameter(f"Unknown app: {name}")
+    result = publish_zip_to_coevo(zip_path=zip_path, title=title, board=board, summary=summary, repo_url=a.repo_url)
+    console.print(Panel.fit(f"✅ Published {name}\nThread: {result['thread_id']}\nArtifact: {result['artifact_id']}", title="apps publish-coevo"))
+
+
+@app.command()
+def up() -> None:
+    """Sync + install + run default hub apps."""
+    apps = _ensure_hub_files()
+    defaults = [a for a in apps if a.enabled_by_default]
+    if not defaults:
+        console.print("No default apps enabled in apps.toml")
+        return
+    for a in defaults:
+        apps_sync(name=a.name, all_apps=False)
+        apps_install(name=a.name, all_apps=False)
+    for a in defaults:
+        apps_run(name=a.name, all_apps=False)
+
+
+@app.command()
+def down() -> None:
+    """Stop all hub-managed apps."""
+    apps_stop(name=None, all_apps=True)
+
+
+@app.command()
+def hub() -> None:
+    """Show hub URLs + runtime status table."""
+    rt = load_runtime(_runtime_path())
+    rows = []
+    for name, info in (rt.get("apps", {}) or {}).items():
+        port = info.get("port")
+        url = f"http://127.0.0.1:{port}" if port else "-"
+        rows.append(f"- {name}: running={info.get('running', False)} url={url}")
+    console.print("\n".join(rows) if rows else "Hub runtime is empty")
