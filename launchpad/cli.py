@@ -360,6 +360,180 @@ def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Proje
 
 
 @app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def run(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to run")) -> None:
+    """Run generated project with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind == "python":
+        code = _run_cmd(["python", "main.py"], cwd=project_dir)
+    elif kind == "fastapi":
+        code = _run_cmd(["uvicorn", "app.main:app", "--reload"], cwd=project_dir)
+    elif kind == "vite":
+        code = _run_cmd(["npm", "install"], cwd=project_dir)
+        if code == 0:
+            code = _run_cmd(["npm", "run", "dev"], cwd=project_dir)
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    _audit().write("run", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def test(project_dir: Path = typer.Option(Path("build/out"), "--in", help="Project directory to test")) -> None:
+    """Run tests with lightweight auto-detection."""
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise typer.BadParameter(f"Not a directory: {project_dir}")
+
+    kind = _project_kind(project_dir)
+    if kind in {"python", "fastapi"}:
+        if shutil.which("pytest"):
+            code = _run_cmd(["pytest"], cwd=project_dir)
+            if code == 5:
+                console.print("[yellow]No pytest tests collected; falling back to unittest discovery.[/yellow]")
+                code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+        else:
+            code = _run_cmd(["python", "-m", "unittest", "discover"], cwd=project_dir)
+    elif kind == "vite":
+        scripts = _package_scripts(project_dir)
+        if "test" in scripts:
+            code = _run_cmd(["npm", "test"], cwd=project_dir)
+        elif "lint" in scripts:
+            code = _run_cmd(["npm", "run", "lint"], cwd=project_dir)
+        else:
+            raise typer.BadParameter("No test/lint script found in package.json")
+    else:
+        raise typer.BadParameter("Could not detect project type (expected main.py, app/main.py, or package.json)")
+
+    if code == 5:
+        console.print("[yellow]No tests discovered; treating as a successful smoke run.[/yellow]")
+        code = 0
+
+    _audit().write("test", {"in": str(project_dir), "kind": kind, "exit_code": code})
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
 def pack(
     in_dir: Path = typer.Option(..., "--in", help="Directory to zip"),
     zip_path: Path = typer.Option(Path("build/artifact.zip"), "--zip", help="Zip output path"),
