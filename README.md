@@ -101,7 +101,13 @@ Each app entry can define:
 - install/run/test/build commands
 - packaging and capsule behavior
 
----
+### Cloud mode limitations
+- No subprocess farm orchestration by default
+- Use cloud-safe actions only:
+  - repo links
+  - source zip links
+  - capsule export JSON
+  - snapshot PNG generation/download
 
 ## Optional CoEvo publish
 
@@ -111,7 +117,12 @@ When `COEVO_*` environment variables are configured, you can publish packaged ar
 poetry run triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
 ```
 
----
+Each app entry defines core metadata such as:
+- name, repo URL, app type
+- stack hints, capsule mode
+- default port range
+- install/start/test/build commands
+- optional health path
 
 ## Troubleshooting
 
