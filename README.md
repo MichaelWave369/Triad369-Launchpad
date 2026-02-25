@@ -1,101 +1,105 @@
-# Triad369 Launchpad Hub ⚡️
+# Triad369-Launchpad (Triad Hub)
 
-Triad369 Launchpad is now a **local-first hub/orchestrator/packager/publisher** for your connected apps.
+**Triad369-Launchpad** is the **local-first hub** that connects and orchestrates your Triad ecosystem: it can **sync**, **inspect**, **package**, and (optionally) **publish** your other apps from one place.
 
-It supports:
-- Spec → Generate → Pack → Publish workflows
-- App workspace orchestration via `triad369 apps ...`
-- Manifest-based artifact integrity (`artifact.manifest.json` + verification)
-- Optional CoEvo publishing
-- Streamlit dashboard mode (cloud-safe)
+- **Default:** local-first + offline-friendly (no telemetry, no scraping)
+- **Modes:**
+  - **Local Hub (CLI):** manage repos on your machine
+  - **Streamlit Hub (Dashboard):** cloud-safe UI for browsing/exporting/snapshotting (no long-running subprocess orchestration in cloud)
 
 ---
 
-## What Launchpad Hub does
+## What it does
 
-### 1) Hub Orchestration (local-first)
-- Registry-driven app management (`.triad369/apps.toml`)
-- Workspace sync to `.triad369/workspace/`
-- App lifecycle helpers: list/sync/install/run/stop/status/open
-- Port-safe runtime tracking in `.triad369/runtime.json`
+### Hub Orchestration
+- Sync (clone/pull) multiple GitHub repos into a local workspace
+- Detect each repo’s stack (Python / FastAPI / Streamlit / Next.js / Vite / static)
+- Show status + recommended run commands
 
-### 2) Packaging + Verification
-- Standardized zip packaging
-- `artifact.manifest.json` with SHA256 hashes
-- Directory and zip verification commands
+### Packaging
+- Build consistent **artifact ZIPs** for any registered app
+- Output an `artifact.manifest.json` with checksums
+- Exclude junk folders like `.git/`, `node_modules/`, `.venv/`, caches, local DBs
 
-### 3) Optional CoEvo publishing
-- Package zip upload + thread publish via configured `COEVO_*` env vars
-- No hidden outbound calls (network is explicit: git + optional CoEvo)
+### Optional Publishing (CoEvo)
+- If configured, Launchpad can publish packaged artifacts to CoEvo
+- Publishing is **opt-in** and requires explicit environment variables
 
-### 4) Streamlit cloud-safe UI
-- Entry point: `streamlit_app.py`
-- Cloud mode avoids long-running subprocess orchestration
-- Supports repo links, source zip links, capsule export, snapshot export
+### Snapshot (PNG)
+- Generate a downloadable **status-card image** (PNG) summarizing your Hub state
 
 ---
 
-## Quickstart (CLI)
+## Quickstart (Local Hub)
 
+### Requirements
+- Python 3.12+
+- Poetry
+- Git
+
+### Install
 ```bash
-# Setup
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[streamlit]
+poetry install
+```
 
-# Initialize config + registry + workspace
-triad369 init
+### Initialize + inspect
+```bash
+poetry run triad369 init
+poetry run triad369 apps doctor
+poetry run triad369 apps list
+```
 
-# Hub checks
-triad369 apps doctor
-triad369 apps list
+### Sync workspace
+```bash
+poetry run triad369 apps sync --all
+```
 
-# Default orchestrator flow
-triad369 up
-triad369 hub
-triad369 down
+### Package a registered app
+```bash
+poetry run triad369 apps pack coevo-api --out build/coevo-api.zip
+poetry run triad369 apps verify coevo-api --zip build/coevo-api.zip
+```
+
+### Generate a Hub snapshot image
+```bash
+poetry run triad369 snapshot --out build/triad-snapshot.png
 ```
 
 ---
 
-## Core Hub commands
+## Streamlit Hub (Cloud-safe)
+
+Run locally:
 
 ```bash
-triad369 apps list
-triad369 apps sync --all
-triad369 apps install --all
-triad369 apps run --all
-triad369 apps stop --all
-triad369 apps status
-triad369 apps open coevo-api
-
-triad369 apps pack coevo-api --out build/coevo-api.zip
-triad369 apps verify coevo-api --zip build/coevo-api.zip
-triad369 apps capsule coevo-api --out build/coevo-api.capsule.json
-triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
+poetry run streamlit run streamlit_app.py
 ```
 
-Top-level helpers:
+### Streamlit Cloud settings
+- **Main file path must be:** `streamlit_app.py`
+- Keep `.streamlit/config.toml` in repo
+- Keep `requirements.txt` using `-e .[streamlit]`
 
-```bash
-triad369 snapshot --out build/triad-snapshot.png
-triad369 verify-artifact --zip build/hello369.zip
-```
+### Cloud mode behavior
+In constrained cloud environments, the dashboard is intentionally safe:
+- shows app metadata and links
+- supports capsule export + snapshot download
+- does **not** start long-running local subprocess fleets by default
 
 ---
 
-## Streamlit Mode
+## App Registry
 
-### Local run
-```bash
-pip install -e .[streamlit]
-streamlit run streamlit_app.py
-```
+Launchpad uses a registry file at:
 
-### Streamlit Cloud deploy checklist
-1. Main file path: **`streamlit_app.py`** (not `launchpad/__init__.py`)
-2. `requirements.txt` should contain `-e .[streamlit]`
-3. Keep `.streamlit/config.toml` committed
+- `.triad369/apps.toml`
+
+Each app entry can define:
+- name + repo URL
+- stack hints and health path
+- default ports
+- install/run/test/build commands
+- packaging and capsule behavior
 
 ### Cloud mode limitations
 - No subprocess farm orchestration by default
@@ -105,12 +109,13 @@ streamlit run streamlit_app.py
   - capsule export JSON
   - snapshot PNG generation/download
 
----
+## Optional CoEvo publish
 
-## App Registry Concept
+When `COEVO_*` environment variables are configured, you can publish packaged artifacts:
 
-The hub registry lives at:
-- `.triad369/apps.toml`
+```bash
+poetry run triad369 apps publish-coevo coevo-api --board dev --title "CoEvo package" --zip build/coevo-api.zip
+```
 
 Each app entry defines core metadata such as:
 - name, repo URL, app type
@@ -119,44 +124,30 @@ Each app entry defines core metadata such as:
 - install/start/test/build commands
 - optional health path
 
-You can edit this file to add/adjust apps and commands safely.
-
----
-
-## Packaging + CoEvo publishing
-
-```bash
-triad369 generate --prompt "A tiny CLI that prints Hello 369" --target python --out build/hello369
-triad369 pack --in build/hello369 --zip build/hello369.zip
-triad369 verify-artifact --zip build/hello369.zip
-
-# Optional if COEVO_* env vars are set
-triad369 publish-coevo --board dev --title "Hello 369 demo" --zip build/hello369.zip
-```
-
----
-
 ## Troubleshooting
 
-### Poetry install error: package not found
-- Ensure `pyproject.toml` includes:
-  - `[tool.poetry]`
-  - `packages = [{ include = "launchpad" }]`
-- Then run:
-  - `poetry check`
-  - `poetry install`
+### Poetry install/package issues
+If packaging fails, confirm `pyproject.toml` includes:
 
-### TOML parse errors
-- Validate quickly:
+- `[tool.poetry]`
+- `packages = [{ include = "launchpad" }]`
+
+Then run:
+
+```bash
+poetry check
+poetry install
+```
+
+### TOML parse check
 ```bash
 python -c "import tomllib; tomllib.load(open('pyproject.toml','rb')); print('TOML OK')"
 ```
 
 ### Streamlit Cloud wrong entrypoint
-- If Cloud points to `launchpad/__init__.py`, change it to `streamlit_app.py`.
+If Cloud points to `launchpad/__init__.py`, change it to `streamlit_app.py`.
 
 ### Lockfile mismatch
-- Rebuild lockfile:
 ```bash
 poetry lock
 poetry install
