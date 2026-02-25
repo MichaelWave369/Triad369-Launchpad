@@ -33,8 +33,8 @@ class CoEvoClient:
         self.token = token
 
     @classmethod
-    def from_env(cls) -> "CoEvoClient":
-        base_url = env("COEVO_BASE_URL", "http://localhost:8000")
+    def from_env(cls, base_url_override: Optional[str] = None) -> "CoEvoClient":
+        base_url = (base_url_override or env("COEVO_BASE_URL", "http://localhost:8000")).strip()
         token = env("COEVO_TOKEN", "")
         if not token:
             handle = env("COEVO_HANDLE")
@@ -72,6 +72,25 @@ class CoEvoClient:
         r.raise_for_status()
         return r.json()
 
+
+    def get_thread(self, thread_id: int) -> dict[str, Any]:
+        r = httpx.get(
+            f"{self.base_url}/api/threads/{thread_id}",
+            headers=self._headers(),
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def list_thread_posts(self, thread_id: int) -> list[dict[str, Any]]:
+        r = httpx.get(
+            f"{self.base_url}/api/threads/{thread_id}/posts",
+            headers=self._headers(),
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
     def create_post(self, thread_id: int, content_md: str) -> dict[str, Any]:
         r = httpx.post(
             f"{self.base_url}/api/threads/{thread_id}/posts",
