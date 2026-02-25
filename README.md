@@ -235,6 +235,7 @@ streamlit run streamlit_app.py
 1. Set app entrypoint to `streamlit_app.py`.
 2. Keep `requirements.txt` as `-e .[streamlit]`.
 3. `.streamlit/config.toml` is included with safe defaults.
+4. In Streamlit Cloud settings, set **Main file path** to `streamlit_app.py` (not `launchpad/__init__.py`).
 
 ### Cloud Mode limitations
 - No long-running subprocess farms by default.

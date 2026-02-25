@@ -22,9 +22,11 @@ def _is_cloud_mode() -> bool:
 
     if os.getenv("STREAMLIT_CLOUD", "").lower() in {"1", "true", "yes"}:
         return True
+    if os.getenv("STREAMLIT_SHARING_MODE", "").lower() == "streamlit_cloud":
+        return True
     if st.secrets.get("FORCE_LOCAL_MODE", False):
         return False
-    return os.getenv("CI", "").lower() == "true"
+    return False
 
 
 def _archive_link(repo_url: str) -> str:
